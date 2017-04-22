@@ -2,36 +2,57 @@
 #include <Adafruit_GPS.h>
 #include <SoftwareSerial.h>
 
+//serial object for GPS parser, tx=11 rx=10
 SoftwareSerial mySerial(11, 10);
 Adafruit_GPS GPS(&mySerial);
 
-int DS18S20_Pin = 2; //DS18S20 Signal pin on digital 2
+//DS18S20 Signal pin on digital 2
+int DS18S20_Pin = 2;
 
 //Temperature chip i/o
-//OneWire ds(DS18S20_Pin); // on digital pin 2
+OneWire ds(DS18S20_Pin);
 
-void setup(void)  {
+/*
+ * Setup
+ * GPS - baud and update rate need to be defined
+ * Temperature - none required
+ * Barometer -
+ * Accelerometer -
+ */
+void setup()  {
   
   Serial.begin(115200);
-  Serial.println("SEG GPS test!");
+  Serial.println("SEG Component test!");
 
-  GPS.begin(115200);
+  //GPS functioning baud rate
+  GPS.begin(9600);
   
   //1hz update rate
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
   GPS.sendCommand(PGCMD_ANTENNA);
 
   delay(1000);
-
-  //mySerial.println(PMTK_Q_RELEASE);
 }
 
+//timer to handle data loop for gps
 uint32_t timer = millis();
 
-void loop(void) {
 
+/*
+ * Loop 
+ * GPS - Read and verify nmea sentence, then print every 2 seconds
+ * Temperature - No parser so local conversion is required then print asap
+ * Barometer -
+ * Accelerometer -
+ */
+void loop() {
+
+  //------ temperature ------//
+  
   float temperature = getTemp(); //will take about 750ms to run
   Serial.println(temperature);
+
+  //------ gps ------//
   
   GPS.read();
   
@@ -43,39 +64,22 @@ void loop(void) {
   //if millis() or timer wraps around, we'll just reset it
   if (timer > millis())  timer = millis();
 
+  //every 2 seconds
   if (millis() - timer > 2000) { 
     timer = millis(); // reset the timer
-    
-    Serial.print("\nTime: ");
-    Serial.print(GPS.hour, DEC); Serial.print(':');
-    Serial.print(GPS.minute, DEC); Serial.print(':');
-    Serial.print(GPS.seconds, DEC); Serial.print('.');
-    Serial.println(GPS.milliseconds);
-    Serial.print("Date: ");
-    Serial.print(GPS.day, DEC); Serial.print('/');
-    Serial.print(GPS.month, DEC); Serial.print("/20");
-    Serial.println(GPS.year, DEC);
-    Serial.print("Fix: "); Serial.print((int)GPS.fix);
-    Serial.print(" quality: "); Serial.println((int)GPS.fixquality); 
-    if (GPS.fix) {
-      Serial.print("Location: ");
-      Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
-      Serial.print(", "); 
-      Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
-      Serial.print("Location (in degrees, works with Google Maps): ");
-      Serial.print(GPS.latitudeDegrees, 4);
-      Serial.print(", "); 
-      Serial.println(GPS.longitudeDegrees, 4);
-      
-      Serial.print("Speed (knots): "); Serial.println(GPS.speed);
-      Serial.print("Angle: "); Serial.println(GPS.angle);
-      Serial.print("Altitude: "); Serial.println(GPS.altitude);
-      Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
-    }
+    printGPS();
   }
-}
+
+  //------ barometer ------//
   
-float getTemp(){
+  
+}
+
+
+/*
+ * Temperature
+ */
+float getTemp() {
  //returns the temperature from one DS18S20 in DEG Celsius
 
  byte data[12];
@@ -123,3 +127,39 @@ float getTemp(){
  return TemperatureSum;
  
 }
+
+
+/*
+ * GPS
+ */
+void printGPS() {
+
+  Serial.print("\nTime: ");
+  Serial.print(GPS.hour, DEC); Serial.print(':');
+  Serial.print(GPS.minute, DEC); Serial.print(':');
+  Serial.print(GPS.seconds, DEC); Serial.print('.');
+  Serial.println(GPS.milliseconds);
+  Serial.print("Date: ");
+  Serial.print(GPS.day, DEC); Serial.print('/');
+  Serial.print(GPS.month, DEC); Serial.print("/20");
+  Serial.println(GPS.year, DEC);
+  Serial.print("Fix: "); Serial.print((int)GPS.fix);
+  Serial.print(" quality: "); Serial.println((int)GPS.fixquality); 
+  if (GPS.fix) {
+    Serial.print("Location: ");  
+    Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
+    Serial.print(", "); 
+    Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
+    Serial.print("Location (in degrees, works with Google Maps): ");
+    Serial.print(GPS.latitudeDegrees, 4);
+    Serial.print(", "); 
+    Serial.println(GPS.longitudeDegrees, 4);
+      
+    Serial.print("Speed (knots): "); Serial.println(GPS.speed);
+    Serial.print("Angle: "); Serial.println(GPS.angle);
+    Serial.print("Altitude: "); Serial.println(GPS.altitude);
+    Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
+  }
+    
+}
+
