@@ -38,13 +38,13 @@ void loop() {
     delay(500);
 
 
-  sprintf(datastring, message); // Puts the text in the datastring
-  unsigned int CHECKSUM = gps_CRC16_checksum(datastring);  // Calculates the checksum for this datastring
+  //sprintf(datastring, message); // Puts the text in the datastring
   char checksum_str[6];
+
+  strcat(datastring, "------It's a nice day for science-------CheckSum:");
+  unsigned int CHECKSUM = gps_CRC16_checksum(datastring);  // Calculates the checksum for this datastring
   sprintf(checksum_str, "*%04X\n", CHECKSUM);
   strcat(datastring,checksum_str);
-  strcat(datastring, "------It's a nice day for science-------");
-
   rtty_txstring (datastring);
   delay(2000);
 
