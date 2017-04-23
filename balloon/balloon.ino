@@ -7,7 +7,7 @@ SoftwareSerial mySerial(11, 10);
 Adafruit_GPS GPS(&mySerial);
 
 //DS18S20 Signal pin on digital 2
-int DS18S20_Pin = 2;
+int DS18S20_Pin = 4;
 
 //Temperature chip i/o
 OneWire ds(DS18S20_Pin);
@@ -32,14 +32,8 @@ OneWire ds(DS18S20_Pin);
 // AD0 high = 0x69
 MPU6050 mpu;
 int time;
-#define TIME_PERIOD 1000
-//MPU6050 mpu(0x69); // <-- use for AD0 high
-// uncomment "OUTPUT_TEAPOT" if you want output that matches the
-// format used for the InvenSense teapot demo
-#define OUTPUT_TEAPOT
-
-#define LED_PIN 13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
-bool blinkState = false;
+Quaternion q;
+#define TIME_PERIOD 100
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
@@ -49,27 +43,50 @@ uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
 uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 
-// orientation/motion vars
-Quaternion q;           // [w, x, y, z]         quaternion container
-VectorInt16 aa;         // [x, y, z]            accel sensor measurements
-VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
-VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
-VectorFloat gravity;    // [x, y, z]            gravity vector
-float euler[3];         // [psi, theta, phi]    Euler angle container
-float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-
-// packet structure for InvenSense teapot demo
-uint8_t teapotPacket[14] = { '$', 0x02, 0,0, 0,0, 0,0, 0,0, 0x00, 0x00, '\r', '\n' };
-
-// ================================================================
-// ===               INTERRUPT DETECTION ROUTINE                ===
-// ================================================================
-
 volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
 void dmpDataReady() {
     mpuInterrupt = true;
 }
 
+/* Barometer start
+ SCP1000 Barometric Pressure Sensor Display
+
+ Shows the output of a Barometric Pressure Sensor on a
+ Uses the SPI library. For details on the sensor, see:
+ http://www.sparkfun.com/commerce/product_info.php?products_id=8161
+ http://www.vti.fi/en/support/obsolete_products/pressure_sensors/
+
+ This sketch adapted from Nathan Seidle's SCP1000 example for PIC:
+ http://www.sparkfun.com/datasheets/Sensors/SCP1000-Testing.zip
+
+ Circuit:
+ SCP1000 sensor attached to pins 6, 7, 10 - 13:
+ DRDY: pin 6
+ CSB: pin 7
+ MOSI: pin 11
+ MISO: pin 12
+ SCK: pin 13
+
+ created 31 July 2010
+ modified 14 August 2010
+ by Tom Igoe
+ */
+
+// the sensor communicates using SPI, so include the library:
+#include <SPI.h>
+
+//Sensor's memory register addresses:
+const int PRESSURE = 0x1F;      //3 most significant bits of pressure
+const int PRESSURE_LSB = 0x20;  //16 least significant bits of pressure
+const int TEMPERATURE = 0x21;   //16 bit temperature reading
+const byte READ = 0b11111100;     // SCP1000's read command
+const byte WRITE = 0b00000010;   // SCP1000's write command
+
+// pins used for the connection with the sensor
+// the other you need are controlled by the SPI library):
+const int dataReadyPin = 6;
+const int chipSelectPin = 7;
+// Barometer End
 
 /*
  * Setup
@@ -79,6 +96,23 @@ void dmpDataReady() {
  * Accelerometer -
  */
 void setup()  {
+  Serial.begin(115200);
+  
+  // Barometer Starts
+ // start the SPI library:
+  SPI.begin();
+
+  // initalize the  data ready and chip select pins:
+  pinMode(dataReadyPin, INPUT);
+  pinMode(chipSelectPin, OUTPUT);
+
+  //Configure SCP1000 for low noise configuration:
+  writeRegister(0x02, 0x2D);
+  writeRegister(0x01, 0x03);
+  writeRegister(0x03, 0x02);
+  // give the sensor time to set up:
+  delay(100);
+  // Barometer ends
   
   // Accelerometer Starts
   
@@ -89,12 +123,6 @@ void setup()  {
     #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
         Fastwire::setup(400, true);
     #endif
-
-    // initialize serial communication
-    // (115200 chosen because it is required for Teapot Demo output, but it's
-    // really up to you depending on your project)
-    Serial.begin(115200);
-    while (!Serial); // wait for Leonardo enumeration, others continue immediately
 
     // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
     // Pro Mini running at 3.3v, cannot handle this baud rate reliably due to
@@ -152,9 +180,6 @@ void setup()  {
         Serial.print(devStatus);
         Serial.println(F(")"));
     }
-
-    // configure LED for output
-    pinMode(LED_PIN, OUTPUT);
     
     time = millis();
   
@@ -187,20 +212,9 @@ void loop() {
 
   // Accelerometer start
   // if programming failed, don't try to do anything
-    if (!dmpReady) return;
-
-    // wait for MPU interrupt or extra packet(s) available
-    while (!mpuInterrupt && fifoCount < packetSize) {
-        // other program behavior stuff here
-        // .
-        // .
-        // .
-        // if you are really paranoid you can frequently test in between other
-        // stuff to see if mpuInterrupt is true, and if so, "break;" from the
-        // while() loop to immediately process the MPU data
-        // .
-        // .
-        // .
+    if (!dmpReady) {
+      Serial.print("you done fucked up");
+      return;
     }
 
     // reset interrupt flag and get INT_STATUS byte
@@ -209,16 +223,6 @@ void loop() {
 
     // get current FIFO count
     fifoCount = mpu.getFIFOCount();
-
-    // check for overflow (this should never happen unless our code is too inefficient)
-    if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-        // reset so we can continue cleanly
-        mpu.resetFIFO();
-        Serial.println(F("FIFO overflow!"));
-
-    // otherwise, check for DMP data ready interrupt (this should happen frequently)
-    } else if (mpuIntStatus & 0x02) {
-        // wait for correct available data length, should be a VERY short wait
         while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
         // read a packet from FIFO
@@ -228,9 +232,6 @@ void loop() {
         // (this lets us immediately read more without waiting for an interrupt)
         fifoCount -= packetSize;
 
-        #ifdef OUTPUT_READABLE_QUATERNION
-        if (millis() - time > TIME_PERIOD) {
-            // display quaternion values in easy matrix form: w x y z
             mpu.dmpGetQuaternion(&q, fifoBuffer);
             Serial.print("quat\t");
             Serial.print(q.w);
@@ -241,97 +242,8 @@ void loop() {
             Serial.print("\t");
             Serial.println(q.z);
             time = millis();
-        }
-        #endif
 
-        #ifdef OUTPUT_READABLE_EULER
-        if (millis() - time > TIME_PERIOD) {
-            // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetEuler(euler, &q);
-            Serial.print("euler\t");
-            Serial.print(euler[0] * 180/M_PI);
-            Serial.print("\t");
-            Serial.print(euler[1] * 180/M_PI);
-            Serial.print("\t");
-            Serial.println(euler[2] * 180/M_PI);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_YAWPITCHROLL
-        if (millis() - time > TIME_PERIOD) {
-            // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-            Serial.print("ypr\t");
-            Serial.print(ypr[0] * 180/M_PI);
-            Serial.print("\t");
-            Serial.print(ypr[1] * 180/M_PI);
-            Serial.print("\t");
-            Serial.println(ypr[2] * 180/M_PI);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_REALACCEL
-        if (millis() - time > TIME_PERIOD) {
-            // display real acceleration, adjusted to remove gravity
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetAccel(&aa, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-            Serial.print("areal\t");
-            Serial.print(aaReal.x);
-            Serial.print("\t");
-            Serial.print(aaReal.y);
-            Serial.print("\t");
-            Serial.println(aaReal.z);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_WORLDACCEL
-        if (millis() - time > TIME_PERIOD) {
-            // display initial world-frame acceleration, adjusted to remove gravity
-            // and rotated based on known orientation from quaternion
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetAccel(&aa, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
-            Serial.print("aworld\t");
-            Serial.print(aaWorld.x);
-            Serial.print("\t");
-            Serial.print(aaWorld.y);
-            Serial.print("\t");
-            Serial.println(aaWorld.z);
-            time = millis();
-        }
-        #endif
-    
-        #ifdef OUTPUT_TEAPOT
-        if (millis() - time > TIME_PERIOD) {
-            // display quaternion values in InvenSense Teapot demo format:
-            teapotPacket[2] = fifoBuffer[0];
-            teapotPacket[3] = fifoBuffer[1];
-            teapotPacket[4] = fifoBuffer[4];
-            teapotPacket[5] = fifoBuffer[5];
-            teapotPacket[6] = fifoBuffer[8];
-            teapotPacket[7] = fifoBuffer[9];
-            teapotPacket[8] = fifoBuffer[12];
-            teapotPacket[9] = fifoBuffer[13];
-            Serial.write(teapotPacket, 14);
-            teapotPacket[11]++; // packetCount, loops at 0xFF on purpose
-            time = millis();
-        }
-        #endif
-
-        // blink LED to indicate activity
-        blinkState = !blinkState;
-        digitalWrite(LED_PIN, blinkState);
-    }
+        mpu.resetFIFO();
     
     // Accelerometer end
   
@@ -360,6 +272,32 @@ void loop() {
 
   //------ barometer ------//
   
+  //Select High Resolution Mode
+  writeRegister(0x03, 0x0A);
+
+  // don't do anything until the data ready pin is high:
+  if (digitalRead(dataReadyPin) == HIGH) {
+    //Read the temperature data
+    int tempData = readRegister(0x21, 2);
+
+    // convert the temperature to celsius and display it:
+    float realTemp = (float)tempData / 20.0;
+    Serial.print("Temp[C]=");
+    Serial.print(realTemp);
+
+
+    //Read the pressure data highest 3 bits:
+    byte  pressure_data_high = readRegister(0x1F, 1);
+    pressure_data_high &= 0b00000111; //you only needs bits 2 to 0
+
+    //Read the pressure data lower 16 bits:
+    unsigned int pressure_data_low = readRegister(0x20, 2);
+    //combine the two parts into one 19-bit number:
+    long pressure = ((pressure_data_high << 16) | pressure_data_low) / 4;
+
+    // display the temperature:
+    Serial.println("\tPressure [Pa]=" + String(pressure));
+  }
   
 }
 
@@ -448,6 +386,61 @@ void printGPS() {
     Serial.print("Altitude: "); Serial.println(GPS.altitude);
     Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
   }
-    
 }
 
+// https://www.arduino.cc/en/Tutorial/BarometricPressureSensor
+//Sends a write command to SCP1000
+
+void writeRegister(byte thisRegister, byte thisValue) {
+
+  // SCP1000 expects the register address in the upper 6 bits
+  // of the byte. So shift the bits left by two bits:
+  thisRegister = thisRegister << 2;
+  // now combine the register address and the command into one byte:
+  byte dataToSend = thisRegister | WRITE;
+
+  // take the chip select low to select the device:
+  digitalWrite(chipSelectPin, LOW);
+
+  SPI.transfer(dataToSend); //Send register location
+  SPI.transfer(thisValue);  //Send value to record into register
+
+  // take the chip select high to de-select:
+  digitalWrite(chipSelectPin, HIGH);
+}
+
+//Read from or write to register from the SCP1000:
+unsigned int readRegister(byte thisRegister, int bytesToRead) {
+  byte inByte = 0;           // incoming byte from the SPI
+  unsigned int result = 0;   // result to return
+  Serial.print(thisRegister, BIN);
+  Serial.print("\t");
+  // SCP1000 expects the register name in the upper 6 bits
+  // of the byte. So shift the bits left by two bits:
+  thisRegister = thisRegister << 2;
+  // now combine the address and the command into one byte
+  byte dataToSend = thisRegister & READ;
+  Serial.println(thisRegister, BIN);
+  // take the chip select low to select the device:
+  digitalWrite(chipSelectPin, LOW);
+  // send the device the register you want to read:
+  SPI.transfer(dataToSend);
+  // send a value of 0 to read the first byte returned:
+  result = SPI.transfer(0x00);
+  // decrement the number of bytes left to read:
+  bytesToRead--;
+  // if you still have another byte to read:
+  if (bytesToRead > 0) {
+    // shift the first byte left, then get the second byte:
+    result = result << 8;
+    inByte = SPI.transfer(0x00);
+    // combine the byte you just got with the previous one:
+    result = result | inByte;
+    // decrement the number of bytes left to read:
+    bytesToRead--;
+  }
+  // take the chip select high to de-select:
+  digitalWrite(chipSelectPin, HIGH);
+  // return the result:
+  return (result);
+}
