@@ -214,7 +214,7 @@ void loop() {
   // if programming failed, don't try to do anything
     if (!dmpReady) {
       Serial.print("you done fucked up");
-      return;
+      while(1) {}
     }
 
     // reset interrupt flag and get INT_STATUS byte
