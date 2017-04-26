@@ -37,32 +37,7 @@ void dmpDataReady() {
 }
 
 // SD card start
-const int chipSelect = 4;
-const char* DATA_LOG_PATH = "datalog.txt";
-
-/* Barometer start
- SCP1000 Barometric Pressure Sensor Display
-
- Shows the output of a Barometric Pressure Sensor on a
- Uses the SPI library. For details on the sensor, see:
- http://www.sparkfun.com/commerce/product_info.php?products_id=8161
- http://www.vti.fi/en/support/obsolete_products/pressure_sensors/
-
- This sketch adapted from Nathan Seidle's SCP1000 example for PIC:
- http://www.sparkfun.com/datasheets/Sensors/SCP1000-Testing.zip
-
- Circuit:
- SCP1000 sensor attached to pins 6, 7, 10 - 13:
- DRDY: pin 6
- CSB: pin 7
- MOSI: pin 11
- MISO: pin 12
- SCK: pin 13
-
- created 31 July 2010
- modified 14 August 2010
- by Tom Igoe
- */
+File myFile;
 
 //Sensor's memory register addresses:
 const int PRESSURE = 0x1F;      //3 most significant bits of pressure
@@ -90,6 +65,8 @@ void setup()  {
   // Barometer Starts
  // start the SPI library:
   SPI.begin();
+  Wire.begin(8);
+  Wire.onRequest(requestEvent);
 
   // initalize the  data ready and chip select pins:
   pinMode(dataReadyPin, INPUT);
@@ -171,12 +148,8 @@ void setup()  {
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
   GPS.sendCommand(PGCMD_ANTENNA);
 
-  // Check if the SD card is present
-  boolean present = SD.begin(chipSelect);
-  if (!present) {
-    //Serial.print("SD card not found! chipSelect : " + chipSelect);
-  } else{
-      //Serial.print("SD card found and loaded!");
+  if (SD.begin(4)) {
+    myFile = SD.open("datalog.txt", FILE_WRITE);
   }
 
   delay(1000);
@@ -195,7 +168,7 @@ uint32_t timer = millis();
  */
 void loop() {
 
-  String dataPacket = "";
+  char* dataPacket = "It's a good day for science";
 
   //------ accelerometer ------//
 
@@ -253,22 +226,15 @@ void loop() {
   String barometerTemp = getBarometerTemp();
   String barometerPres = getBarometerPres();
 
-  boolean logSuccessful = save(dataPacket);
-  if (!logSuccessful){
-     //Serial.println("Couldn't log to file!");
+  if (myFile) {
+    myFile.println(dataPacket);
   }
 
-}
-
-boolean save(String dataPacket){
-  File sdCard = SD.open(DATA_LOG_PATH,FILE_WRITE);
-  if (sdCard){
-    sdCard.println(dataPacket);
-    sdCard.close();
-    return true;
-  }else{
-    return false;
+  boolean transmitSuccessful = Wire.write(dataPacket);
+  if(!transmitSuccessful){
+    Serial.println("Couldn't send data to transmitter!");
   }
+
 }
 
 String getBarometerTemp() {
@@ -420,4 +386,11 @@ unsigned int readRegister(byte thisRegister, int bytesToRead) {
   digitalWrite(chipSelectPin, HIGH);
   // return the result:
   return (result);
+}
+
+// function that executes whenever data is requested by master
+// this function is registered as an event, see setup()
+void requestEvent() {
+  Wire.write("seg "); // respond with message of 6 bytes
+  // as expected by master
 }
