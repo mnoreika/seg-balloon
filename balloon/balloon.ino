@@ -1,6 +1,10 @@
-#include <OneWire.h> 
+#include <OneWire.h>
 #include <Adafruit_GPS.h>
 #include <SoftwareSerial.h>
+#include "I2Cdev.h"
+#include "MPU6050_6Axis_MotionApps20.h"
+#include <SPI.h>
+#include <SD.h>
 
 //serial object for GPS parser, tx=11 rx=10
 SoftwareSerial mySerial(11, 10);
@@ -11,20 +15,6 @@ int DS18S20_Pin = 4;
 
 //Temperature chip i/o
 OneWire ds(DS18S20_Pin);
-
-// Accelerometer
-// I2Cdev and MPU6050 must be installed as libraries, or else the .cpp/.h files
-// for both classes must be in the include path of your project
-#include "I2Cdev.h"
-
-#include "MPU6050_6Axis_MotionApps20.h"
-//#include "MPU6050.h" // not necessary if using MotionApps include file
-
-// Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
-// is used in I2Cdev.h
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-    #include "Wire.h"
-#endif
 
 // class default I2C address is 0x68
 // specific I2C addresses may be passed as a parameter here
@@ -45,6 +35,10 @@ volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin h
 void dmpDataReady() {
     mpuInterrupt = true;
 }
+
+// SD card start
+const int chipSelect = 4;
+const char* DATA_LOG_PATH = "datalog.txt";
 
 /* Barometer start
  SCP1000 Barometric Pressure Sensor Display
@@ -70,9 +64,6 @@ void dmpDataReady() {
  by Tom Igoe
  */
 
-// the sensor communicates using SPI, so include the library:
-#include <SPI.h>
-
 //Sensor's memory register addresses:
 const int PRESSURE = 0x1F;      //3 most significant bits of pressure
 const int PRESSURE_LSB = 0x20;  //16 least significant bits of pressure
@@ -90,12 +81,12 @@ const int chipSelectPin = 7;
  * Setup
  * GPS - baud and update rate need to be defined
  * Temperature - none required
- * Barometer -
- * Accelerometer -
+ * Barometer - initialise pins and configure for low noise
+ * Accelerometer - initialise i2c, gyros and packet size
  */
 void setup()  {
   Serial.begin(115200);
-  
+
   // Barometer Starts
  // start the SPI library:
   SPI.begin();
@@ -111,16 +102,12 @@ void setup()  {
   // give the sensor time to set up:
   delay(100);
   // Barometer ends
-  
+
   // Accelerometer Starts
-  
-  // join I2C bus (I2Cdev library doesn't do this automatically)
-    #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-        Wire.begin();
-        TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
-    #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-        Fastwire::setup(400, true);
-    #endif
+
+  #if I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+      Fastwire::setup(400, true);
+  #endif
 
     // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
     // Pro Mini running at 3.3v, cannot handle this baud rate reliably due to
@@ -129,15 +116,15 @@ void setup()  {
     // crystal solution for the UART timer.
 
     // initialize device
-    Serial.println(F("Initializing I2C devices..."));
+    ////Serial.println(F("Initializing I2C devices..."));
     mpu.initialize();
 
     // verify connection
-    Serial.println(F("Testing device connections..."));
-    Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+    ////Serial.println(F("Testing device connections..."));
+    //Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
 
     // load and configure the DMP
-    Serial.println(F("Initializing DMP..."));
+    //Serial.println(F("Initializing DMP..."));
     devStatus = mpu.dmpInitialize();
 
     // supply your own gyro offsets here, scaled for min sensitivity
@@ -149,16 +136,16 @@ void setup()  {
     // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
         // turn on the DMP, now that it's ready
-        Serial.println(F("Enabling DMP..."));
+        //Serial.println(F("Enabling DMP..."));
         mpu.setDMPEnabled(true);
 
         // enable Arduino interrupt detection
-        Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+        //Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
         attachInterrupt(0, dmpDataReady, RISING);
         mpuIntStatus = mpu.getIntStatus();
 
         // set our DMP Ready flag so the main loop() function knows it's okay to use it
-        Serial.println(F("DMP ready! Waiting for first interrupt..."));
+        //Serial.println(F("DMP ready! Waiting for first interrupt..."));
         dmpReady = true;
 
         // get expected DMP packet size for later comparison
@@ -168,21 +155,29 @@ void setup()  {
         // 1 = initial memory load failed
         // 2 = DMP configuration updates failed
         // (if it's going to break, usually the code will be 1)
-        Serial.print(F("DMP Initialization failed (code "));
-        Serial.print(devStatus);
-        Serial.println(F(")"));
+        //Serial.print(F("DMP Initialization failed (code "));
+        //Serial.print(devStatus);
+        //Serial.println(F(")"));
     }
-  
+
   // Accelerometer end
-  
-  Serial.println("SEG Component test!");
+
+  //Serial.println("SEG Component test!");
 
   //GPS functioning baud rate
   GPS.begin(9600);
-  
+
   //1hz update rate
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
   GPS.sendCommand(PGCMD_ANTENNA);
+
+  // Check if the SD card is present
+  boolean present = SD.begin(chipSelect);
+  if (!present) {
+    //Serial.print("SD card not found! chipSelect : " + chipSelect);
+  } else{
+      //Serial.print("SD card found and loaded!");
+  }
 
   delay(1000);
 }
@@ -192,7 +187,7 @@ uint32_t timer = millis();
 
 
 /*
- * Loop 
+ * Loop
  * GPS - Read and verify nmea sentence, then print every 2 seconds
  * Temperature - No parser so local conversion is required then print asap
  * Barometer -
@@ -200,41 +195,38 @@ uint32_t timer = millis();
  */
 void loop() {
 
-  // Accelerometer start
-  // if programming failed, don't try to do anything
-    if (!dmpReady) {
-      Serial.print("DMP initialisation failed, aborting");
-      while(1) {}
+  String dataPacket = "";
+
+  //------ accelerometer ------//
+
+  //only if dmp is working
+    if (dmpReady) {
+
+      // reset interrupt flag and get INT_STATUS byte
+      mpuInterrupt = false;
+      mpuIntStatus = mpu.getIntStatus();
+
+      // read a packet from FIFO
+      mpu.getFIFOBytes(fifoBuffer, packetSize);
+      mpu.dmpGetQuaternion(&q, fifoBuffer);
+      float dmpW = q.w;
+      float dmpX = q.x;
+      float dmpY = q.y;
+      float dmpZ = q.z;
+
+      // drop the rest of the queue
+      mpu.resetFIFO();
     }
 
-    // reset interrupt flag and get INT_STATUS byte
-    mpuInterrupt = false;
-    mpuIntStatus = mpu.getIntStatus();
-
-    // read a packet from FIFO
-    mpu.getFIFOBytes(fifoBuffer, packetSize);
-    mpu.dmpGetQuaternion(&q, fifoBuffer);
-    Serial.print("quat\t");
-    Serial.print(q.w);
-    Serial.print("\t");
-    Serial.print(q.x);
-    Serial.print("\t");
-    Serial.print(q.y);
-    Serial.print("\t");
-    Serial.println(q.z);
-    // drop the rest of the queue
-    mpu.resetFIFO();  
-    // Accelerometer end
-  
   //------ temperature ------//
-  
+
   float temperature = getTemp(); //will take about 750ms to run
-  Serial.println(temperature);
+  //Serial.println(temperature);
 
   //------ gps ------//
-  
+
   GPS.read();
-  
+
   if (GPS.newNMEAreceived()) {
     if (!GPS.parse(GPS.lastNMEA()))
       return;
@@ -244,26 +236,63 @@ void loop() {
   if (timer > millis())  timer = millis();
 
   //every 2 seconds
-  if (millis() - timer > 2000) { 
+  if (millis() - timer > 2000) {
     timer = millis(); // reset the timer
-    printGPS();
+
+    if (GPS.fix) {
+      float lat = GPS.latitudeDegrees;
+      float lng = GPS.longitudeDegrees;
+    }
   }
 
   //------ barometer ------//
-  
+
   //Select High Resolution Mode
   writeRegister(0x03, 0x0A);
 
-  // don't do anything until the data ready pin is high:
+  String barometerTemp = getBarometerTemp();
+  String barometerPres = getBarometerPres();
+
+  boolean logSuccessful = save(dataPacket);
+  if (!logSuccessful){
+     //Serial.println("Couldn't log to file!");
+  }
+
+}
+
+boolean save(String dataPacket){
+  File sdCard = SD.open(DATA_LOG_PATH,FILE_WRITE);
+  if (sdCard){
+    sdCard.println(dataPacket);
+    sdCard.close();
+    return true;
+  }else{
+    return false;
+  }
+}
+
+String getBarometerTemp() {
+
+   // don't do anything until the data ready pin is high:
   if (digitalRead(dataReadyPin) == HIGH) {
     //Read the temperature data
     int tempData = readRegister(0x21, 2);
 
     // convert the temperature to celsius and display it:
     float realTemp = (float)tempData / 20.0;
-    Serial.print("Temp[C]=");
-    Serial.print(realTemp);
+    //Serial.print("Temp[C]=");
+    //Serial.print(realTemp);
 
+    return String(realTemp);
+
+  }
+
+}
+
+String getBarometerPres() {
+
+    // don't do anything until the data ready pin is high:
+  if (digitalRead(dataReadyPin) == HIGH) {
 
     //Read the pressure data highest 3 bits:
     byte  pressure_data_high = readRegister(0x1F, 1);
@@ -275,9 +304,12 @@ void loop() {
     long pressure = ((pressure_data_high << 16) | pressure_data_low) / 4;
 
     // display the temperature:
-    Serial.println("\tPressure [Pa]=" + String(pressure));
+    //Serial.println("\tPressure [Pa]=" + String(pressure));
+
+    return String(pressure);
+
   }
-  
+
 }
 
 
@@ -297,74 +329,40 @@ float getTemp() {
  }
 
  if ( OneWire::crc8( addr, 7) != addr[7]) {
-   Serial.println("CRC is not valid!");
+   //Serial.println("CRC is not valid!");
    return -1000;
  }
 
  if ( addr[0] != 0x10 && addr[0] != 0x28) {
-   Serial.print("Device is not recognized");
+   //Serial.print("Device is not recognized");
    return -1000;
  }
 
  ds.reset();
  ds.select(addr);
  ds.write(0x44,1); // start conversion, with parasite power on at the end
- 
+
  delay(750); // Wait for temperature conversion to complete
 
  byte present = ds.reset();
- ds.select(addr);  
+ ds.select(addr);
  ds.write(0xBE); // Read Scratchpad
 
- 
+
  for (int i = 0; i < 9; i++) { // we need 9 bytes
   data[i] = ds.read();
  }
- 
+
  ds.reset_search();
- 
+
  byte MSB = data[1];
  byte LSB = data[0];
 
  float tempRead = ((MSB << 8) | LSB); //using two's compliment
  float TemperatureSum = tempRead / 16;
- 
+
  return TemperatureSum;
- 
-}
 
-
-/*
- * GPS
- */
-void printGPS() {
-
-  Serial.print("\nTime: ");
-  Serial.print(GPS.hour, DEC); Serial.print(':');
-  Serial.print(GPS.minute, DEC); Serial.print(':');
-  Serial.print(GPS.seconds, DEC); Serial.print('.');
-  Serial.println(GPS.milliseconds);
-  Serial.print("Date: ");
-  Serial.print(GPS.day, DEC); Serial.print('/');
-  Serial.print(GPS.month, DEC); Serial.print("/20");
-  Serial.println(GPS.year, DEC);
-  Serial.print("Fix: "); Serial.print((int)GPS.fix);
-  Serial.print(" quality: "); Serial.println((int)GPS.fixquality); 
-  if (GPS.fix) {
-    Serial.print("Location: ");  
-    Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
-    Serial.print(", "); 
-    Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
-    Serial.print("Location (in degrees, works with Google Maps): ");
-    Serial.print(GPS.latitudeDegrees, 4);
-    Serial.print(", "); 
-    Serial.println(GPS.longitudeDegrees, 4);
-      
-    Serial.print("Speed (knots): "); Serial.println(GPS.speed);
-    Serial.print("Angle: "); Serial.println(GPS.angle);
-    Serial.print("Altitude: "); Serial.println(GPS.altitude);
-    Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
-  }
 }
 
 // https://www.arduino.cc/en/Tutorial/BarometricPressureSensor
@@ -392,14 +390,14 @@ void writeRegister(byte thisRegister, byte thisValue) {
 unsigned int readRegister(byte thisRegister, int bytesToRead) {
   byte inByte = 0;           // incoming byte from the SPI
   unsigned int result = 0;   // result to return
-  Serial.print(thisRegister, BIN);
-  Serial.print("\t");
+  //Serial.print(thisRegister, BIN);
+  //Serial.print("\t");
   // SCP1000 expects the register name in the upper 6 bits
   // of the byte. So shift the bits left by two bits:
   thisRegister = thisRegister << 2;
   // now combine the address and the command into one byte
   byte dataToSend = thisRegister & READ;
-  Serial.println(thisRegister, BIN);
+  //Serial.println(thisRegister, BIN);
   // take the chip select low to select the device:
   digitalWrite(chipSelectPin, LOW);
   // send the device the register you want to read:
