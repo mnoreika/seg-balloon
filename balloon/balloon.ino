@@ -35,9 +35,7 @@ OneWire ds(DS18S20_Pin);
 // AD0 low = 0x68 (default for SparkFun breakout and InvenSense evaluation board)
 // AD0 high = 0x69
 MPU6050 mpu;
-int time;
 Quaternion q;
-#define TIME_PERIOD 100
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
@@ -155,12 +153,6 @@ void setup()  {
     Serial.println(F("Testing device connections..."));
     Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
 
-    // wait for ready
-    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-    while (Serial.available() && Serial.read()); // empty buffer
-    while (!Serial.available());                 // wait for data
-    while (Serial.available() && Serial.read()); // empty buffer again
-
     // load and configure the DMP
     Serial.println(F("Initializing DMP..."));
     devStatus = mpu.dmpInitialize();
@@ -197,8 +189,6 @@ void setup()  {
         Serial.print(devStatus);
         Serial.println(F(")"));
     }
-    
-    time = millis();
   
   // Accelerometer end
   
@@ -232,7 +222,11 @@ void loop() {
   // Accelerometer start
   // if programming failed, don't try to do anything
     if (!dmpReady) {
-      Serial.print("you done fucked up");
+
+
+
+      Serial.print("DMP initialisation failed, aborting");
+
       while(1) {}
     }
 
@@ -240,30 +234,19 @@ void loop() {
     mpuInterrupt = false;
     mpuIntStatus = mpu.getIntStatus();
 
-    // get current FIFO count
-    fifoCount = mpu.getFIFOCount();
-        while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-
-        // read a packet from FIFO
-        mpu.getFIFOBytes(fifoBuffer, packetSize);
-        
-        // track FIFO count here in case there is > 1 packet available
-        // (this lets us immediately read more without waiting for an interrupt)
-        fifoCount -= packetSize;
-
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            Serial.print("quat\t");
-            Serial.print(q.w);
-            Serial.print("\t");
-            Serial.print(q.x);
-            Serial.print("\t");
-            Serial.print(q.y);
-            Serial.print("\t");
-            Serial.println(q.z);
-            time = millis();
-
-        mpu.resetFIFO();
-    
+    // read a packet from FIFO
+    mpu.getFIFOBytes(fifoBuffer, packetSize);
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
+    Serial.print("quat\t");
+    Serial.print(q.w);
+    Serial.print("\t");
+    Serial.print(q.x);
+    Serial.print("\t");
+    Serial.print(q.y);
+    Serial.print("\t");
+    Serial.println(q.z);
+    // drop the rest of the queue
+    mpu.resetFIFO();  
     // Accelerometer end
   
   //------ temperature ------//
