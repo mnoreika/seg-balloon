@@ -1,6 +1,10 @@
+#include <SD.h>
 #include <OneWire.h> 
 #include <Adafruit_GPS.h>
 #include <SoftwareSerial.h>
+
+// Adding SD card logging of the data (26/04/2017)
+// Code adapted from https://www.arduino.cc/en/Tutorial/Datalogger - Public domain
 
 //serial object for GPS parser, tx=11 rx=10
 SoftwareSerial mySerial(11, 10);
@@ -9,7 +13,7 @@ Adafruit_GPS GPS(&mySerial);
 //DS18S20 Signal pin on digital 2
 int DS18S20_Pin = 4;
 
-//Temperature chip i/o
+//Temperature chip i/o99890------=-=-----------===------------------------=[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[-
 OneWire ds(DS18S20_Pin);
 
 // Accelerometer
@@ -88,6 +92,11 @@ const int dataReadyPin = 6;
 const int chipSelectPin = 7;
 // Barometer End
 
+// SD card start
+const int chipSelect = 4;
+const char* DATA_LOG_PATH = "datalog.txt";
+// SD card end
+
 /*
  * Setup
  * GPS - baud and update rate need to be defined
@@ -97,6 +106,14 @@ const int chipSelectPin = 7;
  */
 void setup()  {
   Serial.begin(115200);
+  
+  // Check if the SD card is present
+ boolean present = SD.begin(chipSelect);
+ if (!present){
+   Serial.print("SD card not found! chipSelect : " + chipSelect);
+ }else{
+   Serial.print("SD card found and loaded!");
+ }
   
   // Barometer Starts
  // start the SPI library:
@@ -209,12 +226,14 @@ uint32_t timer = millis();
  * Accelerometer -
  */
 void loop() {
-
+  
+  String dataPacket = "";
+  
   // Accelerometer start
   // if programming failed, don't try to do anything
     if (!dmpReady) {
       Serial.print("you done fucked up");
-      return;
+      while(1) {}
     }
 
     // reset interrupt flag and get INT_STATUS byte
@@ -276,7 +295,8 @@ void loop() {
   writeRegister(0x03, 0x0A);
 
   // don't do anything until the data ready pin is high:
-  if (digitalRead(dataReadyPin) == HIGH) {
+//  if (digitalRead() == HIGH) {
+  if (1) {
     //Read the temperature data
     int tempData = readRegister(0x21, 2);
 
@@ -299,6 +319,21 @@ void loop() {
     Serial.println("\tPressure [Pa]=" + String(pressure));
   }
   
+  boolean logSuccessful = save(dataPacket);
+  if (!logSuccessful){
+    Serial.println("Couldn't log to file!");
+  }
+}
+
+boolean save(String dataPacket){
+  File sdCard = SD.open(DATA_LOG_PATH,FILE_WRITE);
+  if (sdCard){
+    sdCard.println(dataPacket);
+    sdCard.close();
+    return true;
+  }else{
+    return false;
+  }
 }
 
 
