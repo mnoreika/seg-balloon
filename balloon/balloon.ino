@@ -1,7 +1,8 @@
 #include <SD.h>
-#include <OneWire.h> 
+#include <OneWire.h>
 #include <Adafruit_GPS.h>
 #include <SoftwareSerial.h>
+#include <Wire.h>
 
 // Adding SD card logging of the data (26/04/2017)
 // Code adapted from https://www.arduino.cc/en/Tutorial/Datalogger - Public domain
@@ -104,7 +105,10 @@ const char* DATA_LOG_PATH = "datalog.txt";
  */
 void setup()  {
   Serial.begin(115200);
-  
+
+  Wire.begin(8);                // join i2c bus with address #8
+  Wire.onRequest(requestEvent); // register event
+
   // Check if the SD card is present
  boolean present = SD.begin(chipSelect);
  if (!present){
@@ -112,7 +116,7 @@ void setup()  {
  }else{
    Serial.print("SD card found and loaded!");
  }
-  
+
   // Barometer Starts
  // start the SPI library:
   SPI.begin();
@@ -128,9 +132,9 @@ void setup()  {
   // give the sensor time to set up:
   delay(100);
   // Barometer ends
-  
+
   // Accelerometer Starts
-  
+
   // join I2C bus (I2Cdev library doesn't do this automatically)
     #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
         Wire.begin();
@@ -189,14 +193,14 @@ void setup()  {
         Serial.print(devStatus);
         Serial.println(F(")"));
     }
-  
+
   // Accelerometer end
-  
+
   Serial.println("SEG Component test!");
 
   //GPS functioning baud rate
   GPS.begin(9600);
-  
+
   //1hz update rate
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
   GPS.sendCommand(PGCMD_ANTENNA);
@@ -209,16 +213,16 @@ uint32_t timer = millis();
 
 
 /*
- * Loop 
+ * Loop
  * GPS - Read and verify nmea sentence, then print every 2 seconds
  * Temperature - No parser so local conversion is required then print asap
  * Barometer -
  * Accelerometer -
  */
 void loop() {
-  
+
   String dataPacket = "";
-  
+
   // Accelerometer start
   // if programming failed, don't try to do anything
     if (!dmpReady) {
@@ -246,18 +250,18 @@ void loop() {
     Serial.print("\t");
     Serial.println(q.z);
     // drop the rest of the queue
-    mpu.resetFIFO();  
+    mpu.resetFIFO();
     // Accelerometer end
-  
+
   //------ temperature ------//
-  
+
   float temperature = getTemp(); //will take about 750ms to run
   Serial.println(temperature);
 
   //------ gps ------//
-  
+
   GPS.read();
-  
+
   if (GPS.newNMEAreceived()) {
     if (!GPS.parse(GPS.lastNMEA()))
       return;
@@ -267,13 +271,13 @@ void loop() {
   if (timer > millis())  timer = millis();
 
   //every 2 seconds
-  if (millis() - timer > 2000) { 
+  if (millis() - timer > 2000) {
     timer = millis(); // reset the timer
     printGPS();
   }
 
   //------ barometer ------//
-  
+
   //Select High Resolution Mode
   writeRegister(0x03, 0x0A);
 
@@ -301,12 +305,18 @@ void loop() {
     // display the temperature:
     Serial.println("\tPressure [Pa]=" + String(pressure));
   }
-  
+
+  boolean transmitSuccessful = Wire.write(dataPacket);
+  if(!transmitSuccessful){
+    Serial.println("Couldn't send data to transmitter!");
+  }
+
   boolean logSuccessful = save(dataPacket);
   if (!logSuccessful){
     Serial.println("Couldn't log to file!");
   }
 }
+
 
 boolean save(String dataPacket){
   File sdCard = SD.open(DATA_LOG_PATH,FILE_WRITE);
@@ -348,28 +358,28 @@ float getTemp() {
  ds.reset();
  ds.select(addr);
  ds.write(0x44,1); // start conversion, with parasite power on at the end
- 
+
  delay(750); // Wait for temperature conversion to complete
 
  byte present = ds.reset();
- ds.select(addr);  
+ ds.select(addr);
  ds.write(0xBE); // Read Scratchpad
 
- 
+
  for (int i = 0; i < 9; i++) { // we need 9 bytes
   data[i] = ds.read();
  }
- 
+
  ds.reset_search();
- 
+
  byte MSB = data[1];
  byte LSB = data[0];
 
  float tempRead = ((MSB << 8) | LSB); //using two's compliment
  float TemperatureSum = tempRead / 16;
- 
+
  return TemperatureSum;
- 
+
 }
 
 
@@ -388,17 +398,17 @@ void printGPS() {
   Serial.print(GPS.month, DEC); Serial.print("/20");
   Serial.println(GPS.year, DEC);
   Serial.print("Fix: "); Serial.print((int)GPS.fix);
-  Serial.print(" quality: "); Serial.println((int)GPS.fixquality); 
+  Serial.print(" quality: "); Serial.println((int)GPS.fixquality);
   if (GPS.fix) {
-    Serial.print("Location: ");  
+    Serial.print("Location: ");
     Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
-    Serial.print(", "); 
+    Serial.print(", ");
     Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
     Serial.print("Location (in degrees, works with Google Maps): ");
     Serial.print(GPS.latitudeDegrees, 4);
-    Serial.print(", "); 
+    Serial.print(", ");
     Serial.println(GPS.longitudeDegrees, 4);
-      
+
     Serial.print("Speed (knots): "); Serial.println(GPS.speed);
     Serial.print("Angle: "); Serial.println(GPS.angle);
     Serial.print("Altitude: "); Serial.println(GPS.altitude);
@@ -461,4 +471,13 @@ unsigned int readRegister(byte thisRegister, int bytesToRead) {
   digitalWrite(chipSelectPin, HIGH);
   // return the result:
   return (result);
+}
+
+
+
+// function that executes whenever data is requested by master
+// this function is registered as an event, see setup()
+void requestEvent() {
+  Wire.write("seg "); // respond with message of 6 bytes
+  // as expected by master
 }
