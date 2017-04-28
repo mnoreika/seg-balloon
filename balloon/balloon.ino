@@ -9,8 +9,6 @@
 #include <SPI.h> // Used for communications with the barometer
 #include <SD.h> // Used for saving to the SD card
 
-// The sd datalog
-File dataLogFile;
 
 //serial object for GPS parser, tx=11 rx=10
 SoftwareSerial mySerial(11, 10);
@@ -18,6 +16,8 @@ Adafruit_GPS GPS(&mySerial);
 
 //DS18S20 Signal pin on digital 2
 int DS18S20_Pin = 4;
+
+bool sdCardUsable;
 
 //Temperature chip i/o
 OneWire ds(DS18S20_Pin);
@@ -88,13 +88,13 @@ void setup()  {
   #if I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
       Fastwire::setup(400, true);
   #endif
-  
+
     // Initialize device
     mpu.initialize();
 
     // Verify connection
     String connStatus = (mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-    
+
     // load and configure the DMP. Returns 0 if it was.
     devStatus = mpu.dmpInitialize();
 
@@ -140,9 +140,9 @@ void setup()  {
 
   // Gps end
   // SD start
-  if (SD.begin(4)) {
-    dataLogFile = SD.open("datalog.txt", FILE_WRITE);
-  }
+  sdCardUsable = SD.begin(4);
+
+
   // SD end
   delay(1000);
 }
@@ -169,7 +169,7 @@ void loop() {
   String gpsStr = getGps();
   //------ barometer ------//
   writeRegister(0x03, 0x0A);  //Select High Resolution Mode
- // String barometerTemp = getBarometerTemp(); 
+ // String barometerTemp = getBarometerTemp();
   String barometerPres = getBarometerPres();
 
   //------ Create the data packet ------//
@@ -177,7 +177,7 @@ void loop() {
   dataPacket += String(temperature);
   dataPacket += gpsStr;
   dataPacket += String(barometerPres);
-  
+
   if (dataLogFile) {
     dataLogFile.println(dataPacket);
   }
@@ -186,7 +186,7 @@ void loop() {
   char* dataOut;
   dataPacket.toCharArray(dataOut, dataPacket.length());
   boolean success = Wire.write(dataOut);
-  
+
   if(!success){
     Serial.println("Couldn't send data to transmitter!");
   }
@@ -215,6 +215,16 @@ String getGps(){
   return "0,0";
 }
 
+void writeToFile (String text) {
+  if (sdCardUsable){
+   File dataFile = SD.open("datalog.txt", FILE_WRITE);
+    if (dataFile){
+      dataFile.println(text);
+      dataFile.close();
+    }
+  }
+}
+
 String getAcceleration(){
   String accel;
   //only if dmp is working
@@ -222,7 +232,7 @@ String getAcceleration(){
       // reset interrupt flag and get INT_STATUS byte
       mpuInterrupt = false;
       mpuIntStatus = mpu.getIntStatus();
-      
+
       // read a packet from FIFO
       mpu.getFIFOBytes(fifoBuffer, packetSize);
       mpu.dmpGetQuaternion(&q, fifoBuffer);
@@ -231,7 +241,7 @@ String getAcceleration(){
       accel = accel + q.x + "x";
       accel = accel + q.y + "y";
       accel = accel + q.z + "z";
-      
+
       // drop the rest of the queue
       mpu.resetFIFO();
 
