@@ -1,3 +1,5 @@
+#include <Wire.h>
+
 // Barometer code adapted from
 // https://www.arduino.cc/en/Tutorial/BarometricPressureSensor
 
@@ -13,6 +15,7 @@
 //serial object for GPS parser, tx=11 rx=10
 SoftwareSerial mySerial(11, 10);
 Adafruit_GPS GPS(&mySerial);
+File dataLogFile;
 
 //DS18S20 Signal pin on digital 2
 int DS18S20_Pin = 4;
@@ -39,7 +42,7 @@ uint8_t fifoBuffer[64]; // FIFO storage buffer
 
 volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
 void dmpDataReady() {
-    mpuInterrupt = true;
+  mpuInterrupt = true;
 }
 
 //Sensor's memory register addresses:
@@ -66,7 +69,7 @@ void setup()  {
   Serial.begin(115200);
 
   // Barometer Starts
- // start the SPI library:
+  // start the SPI library:
   SPI.begin();
   Wire.begin(8);
   Wire.onRequest(requestEvent);
@@ -85,48 +88,46 @@ void setup()  {
 
   // Accelerometer Starts
 
-  #if I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-      Fastwire::setup(400, true);
-  #endif
+#if I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+  Fastwire::setup(400, true);
+#endif
 
-    // Initialize device
-    mpu.initialize();
+  // Initialize device
+  mpu.initialize();
 
-    // Verify connection
-    String connStatus = (mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+  // load and configure the DMP. Returns 0 if it was.
+  devStatus = mpu.dmpInitialize();
 
-    // load and configure the DMP. Returns 0 if it was.
-    devStatus = mpu.dmpInitialize();
+  // supply your own gyro offsets here, scaled for min sensitivity
+  mpu.setXGyroOffset(220);
+  mpu.setYGyroOffset(76);
+  mpu.setZGyroOffset(-85);
+  mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
 
-    // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(220);
-    mpu.setYGyroOffset(76);
-    mpu.setZGyroOffset(-85);
-    mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+  // Check if the DMP was successfully loaded and configured. devStatus == 0 if it was
+  if (devStatus == 0) {
+    // Turn on the DMP, now that it's ready
+    mpu.setDMPEnabled(true);
 
-    // Check if the DMP was successfully loaded and configured. devStatus == 0 if it was
-    if (devStatus == 0) {
-        // Turn on the DMP, now that it's ready
-        mpu.setDMPEnabled(true);
+    // Enable Arduino interrupt detection
+    attachInterrupt(0, dmpDataReady, RISING);
+    mpuIntStatus = mpu.getIntStatus();
 
-        // Enable Arduino interrupt detection
-        attachInterrupt(0, dmpDataReady, RISING);
-        mpuIntStatus = mpu.getIntStatus();
+    // Set our DMP Ready flag so the main loop() function knows it's okay to use it
+    dmpReady = true;
 
-        // Set our DMP Ready flag so the main loop() function knows it's okay to use it
-        dmpReady = true;
-
-        // get expected DMP packet size for later comparison
-        packetSize = mpu.dmpGetFIFOPacketSize();
-    } else {
-        // ERROR!
-        // 1 = initial memory load failed
-        // 2 = DMP configuration updates failed
-        // (if it's going to break, usually the code will be 1)
-        //Serial.print(F("DMP Initialization failed (code "));
-        //Serial.print(devStatus);
-        //Serial.println(F(")"));
-    }
+    // get expected DMP packet size for later comparison
+    packetSize = mpu.dmpGetFIFOPacketSize();
+  } 
+  else {
+    // ERROR!
+    // 1 = initial memory load failed
+    // 2 = DMP configuration updates failed
+    // (if it's going to break, usually the code will be 1)
+    //Serial.print(F("DMP Initialization failed (code "));
+    //Serial.print(devStatus);
+    //Serial.println(F(")"));
+  }
 
   // Accelerometer end
 
@@ -164,19 +165,19 @@ void loop() {
   //------ accelerometer ------//
   String acceleration = getAcceleration();
   //------ temperature ------//
-  float temperature = getTemp(); //will take about 750ms to run
+  int temperature = getTemp(); //will take about 750ms to run
   //------ gps ------//
   String gpsStr = getGps();
   //------ barometer ------//
   writeRegister(0x03, 0x0A);  //Select High Resolution Mode
- // String barometerTemp = getBarometerTemp();
+  // String barometerTemp = getBarometerTemp();
   String barometerPres = getBarometerPres();
 
   //------ Create the data packet ------//
   dataPacket += acceleration;
-  dataPacket += String(temperature);
+  dataPacket += String(temperature, 3);
   dataPacket += gpsStr;
-  dataPacket += String(barometerPres);
+  dataPacket += barometerPres;
 
   if (dataLogFile) {
     dataLogFile.println(dataPacket);
@@ -198,7 +199,7 @@ String getGps(){
 
   if (GPS.newNMEAreceived()) {
     if (!GPS.parse(GPS.lastNMEA()))
-      return;
+      return "";
   }
 
   //if millis() or timer wraps around, we'll just reset it
@@ -208,7 +209,7 @@ String getGps(){
   if (millis() - timer > 2000) {
     timer = millis(); // reset the timer
     if (GPS.fix) {
-      String gpsStr = String(GPS.latitudeDegrees) + "," + String(GPS.longitudeDegrees);
+      String gpsStr = String(GPS.latitudeDegrees, 3) + "," + String(GPS.longitudeDegrees, (unsigned char)3);
       return gpsStr;
     }
   }
@@ -217,7 +218,7 @@ String getGps(){
 
 void writeToFile (String text) {
   if (sdCardUsable){
-   File dataFile = SD.open("datalog.txt", FILE_WRITE);
+    File dataFile = SD.open("datalog.txt", FILE_WRITE);
     if (dataFile){
       dataFile.println(text);
       dataFile.close();
@@ -226,52 +227,57 @@ void writeToFile (String text) {
 }
 
 String getAcceleration(){
-  String accel;
+  String accel = "";
   //only if dmp is working
-    if (dmpReady) {
-      // reset interrupt flag and get INT_STATUS byte
-      mpuInterrupt = false;
-      mpuIntStatus = mpu.getIntStatus();
+  if (dmpReady) {
+    // reset interrupt flag and get INT_STATUS byte
+    mpuInterrupt = false;
+    mpuIntStatus = mpu.getIntStatus();
 
-      // read a packet from FIFO
-      mpu.getFIFOBytes(fifoBuffer, packetSize);
-      mpu.dmpGetQuaternion(&q, fifoBuffer);
+    // read a packet from FIFO
+    mpu.getFIFOBytes(fifoBuffer, packetSize);
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
 
-      accel = accel + q.w + "w";
-      accel = accel + q.x + "x";
-      accel = accel + q.y + "y";
-      accel = accel + q.z + "z";
+    accel += "w";
+    accel += String(q.w, 3);
+    accel += "x";
+    accel += String(q.x, 3);
+    accel += "y";
+    accel += String(q.y, 3);
+    accel += "z";
+    accel += String(q.z, 3);
 
-      // drop the rest of the queue
-      mpu.resetFIFO();
+    // drop the rest of the queue
+    mpu.resetFIFO();
 
-      return accel;
-    }else{
-      return "AccelFailed";
-    }
+    return accel;
+  }
+  else{
+    return "AccelFailed";
+  }
 }
 
 /*
 String getBarometerTemp() {
-
-   // don't do anything until the data ready pin is high:
-  if (digitalRead(dataReadyPin) == HIGH) {
-    //Read the temperature data
-    int tempData = readRegister(0x21, 2);
-
-    // convert the temperature to celsius and display it:
-    float realTemp = (float)tempData / 20.0;
-    //Serial.print("Temp[C]=");
-    //Serial.print(realTemp);
-
-    return String(realTemp);
-  }
-  return
-}
-*/
+ 
+ // don't do anything until the data ready pin is high:
+ if (digitalRead(dataReadyPin) == HIGH) {
+ //Read the temperature data
+ int tempData = readRegister(0x21, 2);
+ 
+ // convert the temperature to celsius and display it:
+ float realTemp = (float)tempData / 20.0;
+ //Serial.print("Temp[C]=");
+ //Serial.print(realTemp);
+ 
+ return String(realTemp);
+ }
+ return
+ }
+ */
 // Get the barometer pressure
 String getBarometerPres() {
-    // don't do anything until the data ready pin is high:
+  // don't do anything until the data ready pin is high:
   if (digitalRead(dataReadyPin) == HIGH) {
 
     //Read the pressure data highest 3 bits:
@@ -291,49 +297,49 @@ String getBarometerPres() {
 // Returns the temperature from one DS18S20 in DEG Celsius
 float getTemp() {
 
- byte data[12];
- byte addr[8];
+  byte data[12];
+  byte addr[8];
 
- if ( !ds.search(addr)) {
-   //no more sensors on chain, reset search
-   ds.reset_search();
-   return -1000;
- }
+  if ( !ds.search(addr)) {
+    //no more sensors on chain, reset search
+    ds.reset_search();
+    return -1000;
+  }
 
- if ( OneWire::crc8( addr, 7) != addr[7]) {
-   //Serial.println("CRC is not valid!");
-   return -1000;
- }
+  if ( OneWire::crc8( addr, 7) != addr[7]) {
+    //Serial.println("CRC is not valid!");
+    return -1000;
+  }
 
- if ( addr[0] != 0x10 && addr[0] != 0x28) {
-   //Serial.print("Device is not recognized");
-   return -1000;
- }
+  if ( addr[0] != 0x10 && addr[0] != 0x28) {
+    //Serial.print("Device is not recognized");
+    return -1000;
+  }
 
- ds.reset();
- ds.select(addr);
- ds.write(0x44,1); // start conversion, with parasite power on at the end
+  ds.reset();
+  ds.select(addr);
+  ds.write(0x44,1); // start conversion, with parasite power on at the end
 
- delay(750); // Wait for temperature conversion to complete
+  delay(750); // Wait for temperature conversion to complete
 
- byte present = ds.reset();
- ds.select(addr);
- ds.write(0xBE); // Read Scratchpad
+  byte present = ds.reset();
+  ds.select(addr);
+  ds.write(0xBE); // Read Scratchpad
 
 
- for (int i = 0; i < 9; i++) { // we need 9 bytes
-  data[i] = ds.read();
- }
+  for (int i = 0; i < 9; i++) { // we need 9 bytes
+    data[i] = ds.read();
+  }
 
- ds.reset_search();
+  ds.reset_search();
 
- byte MSB = data[1];
- byte LSB = data[0];
+  byte MSB = data[1];
+  byte LSB = data[0];
 
- float tempRead = ((MSB << 8) | LSB); //using two's compliment
- float TemperatureSum = tempRead / 16;
+  float tempRead = ((MSB << 8) | LSB); //using two's compliment
+  float TemperatureSum = tempRead / 16;
 
- return TemperatureSum;
+  return TemperatureSum;
 
 }
 
@@ -401,3 +407,4 @@ void requestEvent() {
   Wire.write("seg "); // respond with message of 6 bytes
   // as expected by master
 }
+
