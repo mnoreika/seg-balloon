@@ -149,7 +149,7 @@ void setup()  {
 }
 
 //timer to handle data loop for gps
-uint32_t timer = millis();
+//uint32_t timer = millis();
 
 /*
  * Loop
@@ -206,11 +206,11 @@ String getGps(){
   }
 
   //if millis() or timer wraps around, we'll just reset it
-  if (timer > millis())  timer = millis();
+//  if (timer > millis())  timer = millis();
 
-  //Only return every 2 seconds
-  if (millis() - timer > 2000) {
-    timer = millis(); // reset the timer
+//  //Only return every 2 seconds
+//  if (millis() - timer > 2000) {
+  //  timer = millis(); // reset the timer
     if (GPS.fix) {
       char buff[10];
       String gpsStr = String("");
@@ -221,9 +221,10 @@ String getGps(){
       sprintf(buff, "%f", GPS.longitudeDegrees);
       gpsStr += String(buff);
       return gpsStr;
+    }else{
+      return "0,0";
     }
-  }
-  return "0,0";
+//  }
 }
 
 void writeToFile (String text) {
