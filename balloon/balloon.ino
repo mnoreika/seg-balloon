@@ -33,7 +33,7 @@ MPU6050 mpu;
 Quaternion q;
 
 // MPU control/status vars
-bool dmpReady = false;  // set true if DMP init was successful
+// bool dmpReady = false;  // set true if DMP init was successful
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
 uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
@@ -114,7 +114,7 @@ void setup()  {
     mpuIntStatus = mpu.getIntStatus();
 
     // Set our DMP Ready flag so the main loop() function knows it's okay to use it
-    dmpReady = true;
+//    dmpReady = true;
 
     // get expected DMP packet size for later comparison
     packetSize = mpu.dmpGetFIFOPacketSize();
@@ -241,7 +241,6 @@ String getAcceleration(){
   String accel = String("");
   char buff[10];
   //only if dmp is working
-  if (dmpReady) {
     // reset interrupt flag and get INT_STATUS byte
     mpuInterrupt = false;
     mpuIntStatus = mpu.getIntStatus();
@@ -270,10 +269,6 @@ String getAcceleration(){
     mpu.resetFIFO();
 
     return accel;
-  }
-  else{
-    return "AccelFailed";
-  }
 }
 
 /*
