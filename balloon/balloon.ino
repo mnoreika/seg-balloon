@@ -179,9 +179,7 @@ void loop() {
   dataPacket += gpsStr;
   dataPacket += barometerPres;
 
-  if (dataLogFile) {
-    dataLogFile.println(dataPacket);
-  }
+  writeToFile(dataPacket);
 
   // Wire.write returns false if the data couldn't be sent
   char* dataOut;
