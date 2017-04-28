@@ -165,7 +165,7 @@ void loop() {
   //------ accelerometer ------//
   String acceleration = getAcceleration();
   //------ temperature ------//
-  int temperature = getTemp(); //will take about 750ms to run
+  float temperature = getTemp(); //will take about 750ms to run
   //------ gps ------//
   String gpsStr = getGps();
   //------ barometer ------//
@@ -174,21 +174,26 @@ void loop() {
   String barometerPres = getBarometerPres();
 
   //------ Create the data packet ------//
+  char buff[10];
+  sprintf(buff, "%f", temperature);
+
   dataPacket += acceleration;
-  dataPacket += String(temperature, 3);
+  dataPacket += String(buff);
   dataPacket += gpsStr;
   dataPacket += barometerPres;
 
-  writeToFile(dataPacket);
+  if (dataLogFile) {
+    dataLogFile.println(dataPacket);
+  }
 
   // Wire.write returns false if the data couldn't be sent
   char* dataOut;
   dataPacket.toCharArray(dataOut, dataPacket.length());
   boolean success = Wire.write(dataOut);
 
-  if(!success){
-    Serial.println("Couldn't send data to transmitter!");
-  }
+//  if(!success){
+//    Serial.println("Couldn't send data to transmitter!");
+//  }
 }
 
 // Get the GPS output
@@ -207,7 +212,14 @@ String getGps(){
   if (millis() - timer > 2000) {
     timer = millis(); // reset the timer
     if (GPS.fix) {
-      String gpsStr = String(GPS.latitudeDegrees, 3) + "," + String(GPS.longitudeDegrees, (unsigned char)3);
+      char buff[10];
+      String gpsStr = String("");
+      
+      sprintf(buff, "%f", GPS.latitudeDegrees);
+      gpsStr += String(buff) + ",";
+      
+      sprintf(buff, "%f", GPS.longitudeDegrees);
+      gpsStr += String(buff);
       return gpsStr;
     }
   }
@@ -225,7 +237,8 @@ void writeToFile (String text) {
 }
 
 String getAcceleration(){
-  String accel = "";
+  String accel = String("");
+  char buff[10];
   //only if dmp is working
   if (dmpReady) {
     // reset interrupt flag and get INT_STATUS byte
@@ -236,14 +249,21 @@ String getAcceleration(){
     mpu.getFIFOBytes(fifoBuffer, packetSize);
     mpu.dmpGetQuaternion(&q, fifoBuffer);
 
-    accel += "w";
-    accel += String(q.w, 3);
-    accel += "x";
-    accel += String(q.x, 3);
-    accel += "y";
-    accel += String(q.y, 3);
-    accel += "z";
-    accel += String(q.z, 3);
+    accel += String("w");
+    sprintf(buff, "%f", q.w);
+    accel += String(buff);
+    
+    accel += String("x");
+    sprintf(buff, "%f", q.x);
+    accel += String(buff);
+    
+    accel += String("y");
+    sprintf(buff, "%f", q.y);
+    accel += String(buff);
+    
+    accel += String("z");
+    sprintf(buff, "%f", q.z);
+    accel += String(buff);
 
     // drop the rest of the queue
     mpu.resetFIFO();
