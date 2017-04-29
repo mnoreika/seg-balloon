@@ -66,7 +66,7 @@ const int chipSelectPin = 7;
  * Accelerometer - initialise i2c, gyros and packet size
  */
 void setup()  {
-  Serial.begin(115200);
+  // Serial.begin(115200);
 
   // Barometer Starts
   // start the SPI library:
@@ -105,7 +105,6 @@ void setup()  {
   mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
 
   // Check if the DMP was successfully loaded and configured. devStatus == 0 if it was
-  if (devStatus == 0) {
     // Turn on the DMP, now that it's ready
     mpu.setDMPEnabled(true);
 
@@ -118,16 +117,6 @@ void setup()  {
 
     // get expected DMP packet size for later comparison
     packetSize = mpu.dmpGetFIFOPacketSize();
-  } 
-  else {
-    // ERROR!
-    // 1 = initial memory load failed
-    // 2 = DMP configuration updates failed
-    // (if it's going to break, usually the code will be 1)
-    //Serial.print(F("DMP Initialization failed (code "));
-    //Serial.print(devStatus);
-    //Serial.println(F(")"));
-  }
 
   // Accelerometer end
 
