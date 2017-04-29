@@ -9,18 +9,14 @@
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 #include <SPI.h> // Used for communications with the barometer
-#include <SD.h> // Used for saving to the SD card
 
 
 //serial object for GPS parser, tx=11 rx=10
 SoftwareSerial mySerial(11, 10);
 Adafruit_GPS GPS(&mySerial);
-File dataLogFile;
 
 //DS18S20 Signal pin on digital 2
 int DS18S20_Pin = 4;
-
-bool sdCardUsable;
 
 //Temperature chip i/o
 OneWire ds(DS18S20_Pin);
@@ -40,10 +36,10 @@ uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
 uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 
-volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
-void dmpDataReady() {
-  mpuInterrupt = true;
-}
+//volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+//void dmpDataReady() {
+//  mpuInterrupt = true;
+//}
 
 //Sensor's memory register addresses:
 const int PRESSURE = 0x1F;      //3 most significant bits of pressure
@@ -66,7 +62,7 @@ const int chipSelectPin = 7;
  * Accelerometer - initialise i2c, gyros and packet size
  */
 void setup()  {
-  // Serial.begin(115200);
+  Serial.begin(115200);
 
   // Barometer Starts
   // start the SPI library:
@@ -109,7 +105,7 @@ void setup()  {
     mpu.setDMPEnabled(true);
 
     // Enable Arduino interrupt detection
-    attachInterrupt(0, dmpDataReady, RISING);
+//    attachInterrupt(0, dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
 
     // Set our DMP Ready flag so the main loop() function knows it's okay to use it
@@ -129,8 +125,6 @@ void setup()  {
   GPS.sendCommand(PGCMD_ANTENNA);
 
   // Gps end
-  // SD start
-  sdCardUsable = SD.begin(4);
 
 
   // SD end
@@ -150,35 +144,32 @@ void setup()  {
 void loop() {
 
   String dataPacket;
+  // Structure of the packet:
+  // w,x,y,z,temp,lat,long,pres
 
   //------ accelerometer ------//
-  String acceleration = getAcceleration();
+  dataPacket += getAcceleration();
+  
   //------ temperature ------//
   float temperature = getTemp(); //will take about 750ms to run
+  char buff[10];
+  sprintf(buff, "%f,", temperature);
+  dataPacket += String(buff);
+  
   //------ gps ------//
-  String gpsStr = getGps();
+  dataPacket += getGps();
+  dataPacket += ",";
+  
   //------ barometer ------//
   writeRegister(0x03, 0x0A);  //Select High Resolution Mode
-  // String barometerTemp = getBarometerTemp();
-  String barometerPres = getBarometerPres();
-
-  //------ Create the data packet ------//
-  char buff[10];
-  sprintf(buff, "%f", temperature);
-
-  dataPacket += acceleration;
-  dataPacket += String(buff);
-  dataPacket += gpsStr;
-  dataPacket += barometerPres;
-
-  if (dataLogFile) {
-    dataLogFile.println(dataPacket);
-  }
+  dataPacket += getBarometerPres();
 
   // Wire.write returns false if the data couldn't be sent
   char* dataOut;
   dataPacket.toCharArray(dataOut, dataPacket.length());
   boolean success = Wire.write(dataOut);
+  Serial.println(dataPacket);
+  delay(1000);
 
 //  if(!success){
 //    Serial.println("Couldn't send data to transmitter!");
@@ -216,42 +207,28 @@ String getGps(){
 //  }
 }
 
-void writeToFile (String text) {
-  if (sdCardUsable){
-    File dataFile = SD.open("datalog.txt", FILE_WRITE);
-    if (dataFile){
-      dataFile.println(text);
-      dataFile.close();
-    }
-  }
-}
-
 String getAcceleration(){
   String accel = String("");
   char buff[10];
   //only if dmp is working
     // reset interrupt flag and get INT_STATUS byte
-    mpuInterrupt = false;
-    mpuIntStatus = mpu.getIntStatus();
+    //mpuInterrupt = false;
+    //mpuIntStatus = mpu.getIntStatus();
 
     // read a packet from FIFO
     mpu.getFIFOBytes(fifoBuffer, packetSize);
     mpu.dmpGetQuaternion(&q, fifoBuffer);
 
-    accel += String("w");
-    sprintf(buff, "%f", q.w);
+    sprintf(buff, "%d,", (int)(q.w * 1000));
     accel += String(buff);
     
-    accel += String("x");
-    sprintf(buff, "%f", q.x);
+    sprintf(buff, "%d,", (int)(q.x * 1000));
     accel += String(buff);
     
-    accel += String("y");
-    sprintf(buff, "%f", q.y);
+    sprintf(buff, "%d,", (int)(q.y * 1000));
     accel += String(buff);
     
-    accel += String("z");
-    sprintf(buff, "%f", q.z);
+    sprintf(buff, "%d,", (int)(q.z * 1000));
     accel += String(buff);
 
     // drop the rest of the queue
@@ -290,11 +267,11 @@ String getBarometerPres() {
     //Read the pressure data lower 16 bits:
     unsigned int pressure_data_low = readRegister(0x20, 2);
     //combine the two parts into one 19-bit number:
-    long pressure = ((pressure_data_high << 16) | pressure_data_low) / 4;
+//    long pressure = ((pressure_data_high << 16) | pressure_data_low) / 4;
 
-    return String(pressure);
+    return String(((pressure_data_high << 16) | pressure_data_low) / 4);
   }
-  return "NoPressure";
+  return "";
 }
 
 // Returns the temperature from one DS18S20 in DEG Celsius
