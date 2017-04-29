@@ -153,7 +153,7 @@ void loop() {
   //------ temperature ------//
   float temperature = getTemp(); //will take about 750ms to run
   char buff[10];
-  sprintf(buff, "%f,", temperature);
+  sprintf(buff, "%d,", (int)(temperature * 1000));
   dataPacket += String(buff);
   
   //------ gps ------//
@@ -237,24 +237,6 @@ String getAcceleration(){
     return accel;
 }
 
-/*
-String getBarometerTemp() {
- 
- // don't do anything until the data ready pin is high:
- if (digitalRead(dataReadyPin) == HIGH) {
- //Read the temperature data
- int tempData = readRegister(0x21, 2);
- 
- // convert the temperature to celsius and display it:
- float realTemp = (float)tempData / 20.0;
- //Serial.print("Temp[C]=");
- //Serial.print(realTemp);
- 
- return String(realTemp);
- }
- return
- }
- */
 // Get the barometer pressure
 String getBarometerPres() {
   // don't do anything until the data ready pin is high:
@@ -266,12 +248,11 @@ String getBarometerPres() {
 
     //Read the pressure data lower 16 bits:
     unsigned int pressure_data_low = readRegister(0x20, 2);
+    
     //combine the two parts into one 19-bit number:
-//    long pressure = ((pressure_data_high << 16) | pressure_data_low) / 4;
-
     return String(((pressure_data_high << 16) | pressure_data_low) / 4);
   }
-  return "";
+  return "0";
 }
 
 // Returns the temperature from one DS18S20 in DEG Celsius
