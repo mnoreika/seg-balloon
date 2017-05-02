@@ -1,32 +1,24 @@
-#include <Wire.h>
-
-// Barometer code adapted from
-// https://www.arduino.cc/en/Tutorial/BarometricPressureSensor
-
-#include <OneWire.h> // Used for communications with the temperature sensor
-#include <Adafruit_GPS.h> // Used for communications with the GPS
-#include <SoftwareSerial.h> // Used for communications with the GPS
+#include <string.h>
+#include <util/crc16.h>
+#include "Wire.h"
 #include "I2Cdev.h"
+#include "OneWire.h"
 #include "MPU6050_6Axis_MotionApps20.h"
-#include <SPI.h> // Used for communications with the barometer
+#define RADIOPIN 13
 
-
-//serial object for GPS parser, tx=11 rx=10
-SoftwareSerial mySerial(11, 10);
-Adafruit_GPS GPS(&mySerial);
+char datastring[80];
 
 //DS18S20 Signal pin on digital 2
 int DS18S20_Pin = 4;
 
 //Temperature chip i/o
 OneWire ds(DS18S20_Pin);
-
-// class default I2C address is 0x68
-// specific I2C addresses may be passed as a parameter here
-// AD0 low = 0x68 (default for SparkFun breakout and InvenSense evaluation board)
-// AD0 high = 0x69
 MPU6050 mpu;
 Quaternion q;
+VectorInt16 aa;         // [x, y, z]            accel sensor measurements
+VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
+VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
+VectorFloat gravity;    // [x, y, z]            gravity vector
 
 // MPU control/status vars
 // bool dmpReady = false;  // set true if DMP init was successful
@@ -36,51 +28,18 @@ uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
 uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 
-//volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
-//void dmpDataReady() {
-//  mpuInterrupt = true;
-//}
-
-//Sensor's memory register addresses:
-const int PRESSURE = 0x1F;      //3 most significant bits of pressure
-const int PRESSURE_LSB = 0x20;  //16 least significant bits of pressure
-const int TEMPERATURE = 0x21;   //16 bit temperature reading
-const byte READ = 0b11111100;     // SCP1000's read command
-const byte WRITE = 0b00000010;   // SCP1000's write command
-
-// pins used for the connection with the sensor
-// the other you need are controlled by the SPI library):
-const int dataReadyPin = 6;
-const int chipSelectPin = 7;
-// Barometer End
+volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+void dmpDataReady() {
+  mpuInterrupt = true;
+}
 
 /*
  * Setup
- * GPS - baud and update rate need to be defined
  * Temperature - none required
- * Barometer - initialise pins and configure for low noise
  * Accelerometer - initialise i2c, gyros and packet size
  */
 void setup()  {
-  Serial.begin(115200);
-
-  // Barometer Starts
-  // start the SPI library:
-  SPI.begin();
-  Wire.begin(8);
-  Wire.onRequest(requestEvent);
-
-  // initalize the  data ready and chip select pins:
-  pinMode(dataReadyPin, INPUT);
-  pinMode(chipSelectPin, OUTPUT);
-
-  //Configure SCP1000 for low noise configuration:
-  writeRegister(0x02, 0x2D);
-  writeRegister(0x01, 0x03);
-  writeRegister(0x03, 0x02);
-  // give the sensor time to set up:
-  delay(100);
-  // Barometer ends
+  Serial.begin(9600);
 
   // Accelerometer Starts
 
@@ -91,61 +50,38 @@ void setup()  {
   // Initialize device
   mpu.initialize();
 
-  // load and configure the DMP. Returns 0 if it was.
-  devStatus = mpu.dmpInitialize();
-
   // supply your own gyro offsets here, scaled for min sensitivity
   mpu.setXGyroOffset(220);
   mpu.setYGyroOffset(76);
   mpu.setZGyroOffset(-85);
   mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
 
-  // Check if the DMP was successfully loaded and configured. devStatus == 0 if it was
-    // Turn on the DMP, now that it's ready
-    mpu.setDMPEnabled(true);
+  // Turn on the DMP, now that it's ready
+  mpu.setDMPEnabled(true);
 
-    // Enable Arduino interrupt detection
-//    attachInterrupt(0, dmpDataReady, RISING);
-    mpuIntStatus = mpu.getIntStatus();
-
-    // Set our DMP Ready flag so the main loop() function knows it's okay to use it
-//    dmpReady = true;
+  // Enable Arduino interrupt detection
+  attachInterrupt(0, dmpDataReady, RISING);
+  mpuIntStatus = mpu.getIntStatus();
 
     // get expected DMP packet size for later comparison
     packetSize = mpu.dmpGetFIFOPacketSize();
 
   // Accelerometer end
-
-  // Gps start
-  //GPS functioning baud rate
-  GPS.begin(9600);
-
-  //1hz update rate
-  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
-  GPS.sendCommand(PGCMD_ANTENNA);
-
-  // Gps end
-
-
-  // SD end
-  delay(1000);
+  
+  // Transmission setup
+  pinMode(RADIOPIN,OUTPUT);
 }
-
-//timer to handle data loop for gps
-//uint32_t timer = millis();
 
 /*
  * Loop
- * GPS - Read and verify nmea sentence, then print every 2 seconds
  * Temperature - No parser so local conversion is required then print asap
- * Barometer -
  * Accelerometer -
  */
 void loop() {
 
   String dataPacket;
   // Structure of the packet:
-  // w,x,y,z,temp,lat,long,pres
+  // x,y,z,temp,checksum
 
   //------ accelerometer ------//
   dataPacket += getAcceleration();
@@ -155,104 +91,52 @@ void loop() {
   char buff[10];
   sprintf(buff, "%d,", (int)(temperature * 1000));
   dataPacket += String(buff);
-  
-  //------ gps ------//
-  dataPacket += getGps();
-  dataPacket += ",";
-  
-  //------ barometer ------//
-  writeRegister(0x03, 0x0A);  //Select High Resolution Mode
-  dataPacket += getBarometerPres();
 
   // Wire.write returns false if the data couldn't be sent
-  char* dataOut;
+  char dataOut[64];
   dataPacket.toCharArray(dataOut, dataPacket.length());
-  boolean success = Wire.write(dataOut);
-  Serial.println(dataPacket);
-  delay(1000);
 
-//  if(!success){
-//    Serial.println("Couldn't send data to transmitter!");
-//  }
-}
+  char checksum_str[6];
 
-// Get the GPS output
-String getGps(){
-  GPS.read();
-
-  if (GPS.newNMEAreceived()) {
-    if (!GPS.parse(GPS.lastNMEA()))
-      return "";
-  }
-
-  //if millis() or timer wraps around, we'll just reset it
-//  if (timer > millis())  timer = millis();
-
-//  //Only return every 2 seconds
-//  if (millis() - timer > 2000) {
-  //  timer = millis(); // reset the timer
-    if (GPS.fix) {
-      char buff[10];
-      String gpsStr = String("");
-      
-      sprintf(buff, "%f", GPS.latitudeDegrees);
-      gpsStr += String(buff) + ",";
-      
-      sprintf(buff, "%f", GPS.longitudeDegrees);
-      gpsStr += String(buff);
-      return gpsStr;
-    }else{
-      return "0,0";
-    }
-//  }
+  strcat(datastring, dataOut);
+  Serial.println(dataOut);
+  //unsigned int CHECKSUM = gps_CRC16_checksum(datastring);  // Calculates the checksum for this datastring
+  //sprintf(checksum_str, "*%04X\n", CHECKSUM);
+  //strcat(datastring,checksum_str);
+  //rtty_txstring (datastring);
+  //delay(2000);
 }
 
 String getAcceleration(){
   String accel = String("");
-  char buff[10];
-  //only if dmp is working
-    // reset interrupt flag and get INT_STATUS byte
-    //mpuInterrupt = false;
-    //mpuIntStatus = mpu.getIntStatus();
+  char buff[64];
 
-    // read a packet from FIFO
-    mpu.getFIFOBytes(fifoBuffer, packetSize);
-    mpu.dmpGetQuaternion(&q, fifoBuffer);
+  // read a packet from FIFO
+  mpu.getFIFOBytes(fifoBuffer, packetSize);
+  mpu.dmpGetQuaternion(&q, fifoBuffer);
 
-    sprintf(buff, "%d,", (int)(q.w * 1000));
-    accel += String(buff);
+  // drop the rest of the queue
+  mpu.resetFIFO();
+  
+  // display initial world-frame acceleration, adjusted to remove gravity
+  // and rotated based on known orientation from quaternion
+  mpu.dmpGetQuaternion(&q, fifoBuffer);
+  mpu.dmpGetAccel(&aa, fifoBuffer);
+  mpu.dmpGetGravity(&gravity, &q);
+  mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+  mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
+
+//  sprintf(buff, "%d,", (int)(aaWorld.x * 1000));
+  sprintf(buff, "%d,", (int)(q.x * 1000));
+  accel += String(buff);
     
-    sprintf(buff, "%d,", (int)(q.x * 1000));
-    accel += String(buff);
+  sprintf(buff, "%d,", (int)(aaWorld.y * 1000));
+  accel += String(buff);
     
-    sprintf(buff, "%d,", (int)(q.y * 1000));
-    accel += String(buff);
-    
-    sprintf(buff, "%d,", (int)(q.z * 1000));
-    accel += String(buff);
+  sprintf(buff, "%d,", (int)(aaWorld.z * 1000));
+  accel += String(buff);
 
-    // drop the rest of the queue
-    mpu.resetFIFO();
-
-    return accel;
-}
-
-// Get the barometer pressure
-String getBarometerPres() {
-  // don't do anything until the data ready pin is high:
-  if (digitalRead(dataReadyPin) == HIGH) {
-
-    //Read the pressure data highest 3 bits:
-    byte  pressure_data_high = readRegister(0x1F, 1);
-    pressure_data_high &= 0b00000111; //you only needs bits 2 to 0
-
-    //Read the pressure data lower 16 bits:
-    unsigned int pressure_data_low = readRegister(0x20, 2);
-    
-    //combine the two parts into one 19-bit number:
-    return String(((pressure_data_high << 16) | pressure_data_low) / 4);
-  }
-  return "0";
+  return accel;
 }
 
 // Returns the temperature from one DS18S20 in DEG Celsius
@@ -304,68 +188,94 @@ float getTemp() {
 
 }
 
-// Barometer code adapted from
-// https://www.arduino.cc/en/Tutorial/BarometricPressureSensor
-// Sends a write command to SCP1000
-void writeRegister(byte thisRegister, byte thisValue) {
 
-  // SCP1000 expects the register address in the upper 6 bits
-  // of the byte. So shift the bits left by two bits:
-  thisRegister = thisRegister << 2;
-  // now combine the register address and the command into one byte:
-  byte dataToSend = thisRegister | WRITE;
+void rtty_txstring (char * string)
+{
 
-  // take the chip select low to select the device:
-  digitalWrite(chipSelectPin, LOW);
+  /* Simple function to sent a char at a time to
+     ** rtty_txbyte function.
+    ** NB Each char is one byte (8 Bits)
+    */
 
-  SPI.transfer(dataToSend); //Send register location
-  SPI.transfer(thisValue);  //Send value to record into register
+  char c;
 
-  // take the chip select high to de-select:
-  digitalWrite(chipSelectPin, HIGH);
-}
+  c = *string++;
 
-//Read from or write to register from the SCP1000:
-unsigned int readRegister(byte thisRegister, int bytesToRead) {
-  byte inByte = 0;           // incoming byte from the SPI
-  unsigned int result = 0;   // result to return
-  //Serial.print(thisRegister, BIN);
-  //Serial.print("\t");
-  // SCP1000 expects the register name in the upper 6 bits
-  // of the byte. So shift the bits left by two bits:
-  thisRegister = thisRegister << 2;
-  // now combine the address and the command into one byte
-  byte dataToSend = thisRegister & READ;
-  //Serial.println(thisRegister, BIN);
-  // take the chip select low to select the device:
-  digitalWrite(chipSelectPin, LOW);
-  // send the device the register you want to read:
-  SPI.transfer(dataToSend);
-  // send a value of 0 to read the first byte returned:
-  result = SPI.transfer(0x00);
-  // decrement the number of bytes left to read:
-  bytesToRead--;
-  // if you still have another byte to read:
-  if (bytesToRead > 0) {
-    // shift the first byte left, then get the second byte:
-    result = result << 8;
-    inByte = SPI.transfer(0x00);
-    // combine the byte you just got with the previous one:
-    result = result | inByte;
-    // decrement the number of bytes left to read:
-    bytesToRead--;
+  while ( c != '\0')
+  {
+    rtty_txbyte (c);
+    c = *string++;
   }
-  // take the chip select high to de-select:
-  digitalWrite(chipSelectPin, HIGH);
-  // return the result:
-  return (result);
 }
 
-// function that executes whenever data is requested by master
-// this function is registered as an event, see setup()
-// This is used for transmission between ardunios
-void requestEvent() {
-  Wire.write("seg "); // respond with message of 6 bytes
-  // as expected by master
+
+void rtty_txbyte (char c)
+{
+  /* Simple function to sent each bit of a char to
+    ** rtty_txbit function.
+    ** NB The bits are sent Least Significant Bit first
+    **
+    ** All chars should be preceded with a 0 and
+    ** proceded with a 1. 0 = Start bit; 1 = Stop bit
+    **
+    */
+
+  int i;
+
+  rtty_txbit (0); // Start bit
+
+  // Send bits for for char LSB first
+
+  for (i=0;i<7;i++) // Change this here 7 or 8 for ASCII-7 / ASCII-8
+  {
+    if (c & 1) rtty_txbit(1);
+
+    else rtty_txbit(0);
+
+    c = c >> 1;
+
+  }
+
+  rtty_txbit (1); // Stop bit
+  rtty_txbit (1); // Stop bit
 }
 
+void rtty_txbit (int bit)
+{
+  if (bit)
+  {
+    // high
+    digitalWrite(RADIOPIN, HIGH);
+  }
+  else
+  {
+    // low
+    digitalWrite(RADIOPIN, LOW);
+
+  }
+
+  //                  delayMicroseconds(3370); // 300 baud
+  delayMicroseconds(10000); // For 50 Baud uncomment this and the line below.
+  delayMicroseconds(10150); // You can't do 20150 it just doesn't work as the
+                            // largest value that will produce an accurate delay is 16383
+                            // See : http://arduino.cc/en/Reference/DelayMicroseconds
+
+}
+
+uint16_t gps_CRC16_checksum (char *string)
+{
+  size_t i;
+  uint16_t crc;
+  uint8_t c;
+
+  crc = 0xFFFF;
+
+  // Calculate checksum ignoring the first two $s
+  for (i = 2; i < strlen(string); i++)
+  {
+    c = string[i];
+    crc = _crc_xmodem_update (crc, c);
+  }
+
+  return crc;
+}
