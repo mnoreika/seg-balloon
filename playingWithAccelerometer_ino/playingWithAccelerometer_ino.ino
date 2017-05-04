@@ -1,51 +1,9 @@
-// I2C device class (I2Cdev) demonstration Arduino sketch for MPU6050 class using DMP (MotionApps v2.0)
-// 6/21/2012 by Jeff Rowberg <jeff@rowberg.net>
-// Updates should (hopefully) always be available at https://github.com/jrowberg/i2cdevlib
-//
-// Changelog:
-//      2013-05-08 - added seamless Fastwire support
-//                 - added note about gyro calibration
-//      2012-06-21 - added note about Arduino 1.0.1 + Leonardo compatibility error
-//      2012-06-20 - improved FIFO overflow handling and simplified read process
-//      2012-06-19 - completely rearranged DMP initialization code and simplification
-//      2012-06-13 - pull gyro and accel data from FIFO packet instead of reading directly
-//      2012-06-09 - fix broken FIFO read sequence and change interrupt detection to RISING
-//      2012-06-05 - add gravity-compensated initial reference frame acceleration output
-//                 - add 3D math helper file to DMP6 example sketch
-//                 - add Euler output and Yaw/Pitch/Roll output formats
-//      2012-06-04 - remove accel offset clearing for better results (thanks Sungon Lee)
-//      2012-06-01 - fixed gyro sensitivity to be 2000 deg/sec instead of 250
-//      2012-05-30 - basic DMP initialization working
-
-/* ============================================
-I2Cdev device library code is placed under the MIT license
-Copyright (c) 2012 Jeff Rowberg
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-===============================================
-*/
-
 // I2Cdev and MPU6050 must be installed as libraries, or else the .cpp/.h files
 // for both classes must be in the include path of your project
 #include "I2Cdev.h"
 
 #include "MPU6050_6Axis_MotionApps20.h"
+#include "OneWire.h"
 //#include "MPU6050.h" // not necessary if using MotionApps include file
 
 // Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
@@ -61,6 +19,13 @@ THE SOFTWARE.
 MPU6050 mpu;
 int time;
 #define TIME_PERIOD 1000
+#define RADIOPIN 13
+
+//DS18S20 Signal pin on digital 2
+int DS18S20_Pin = 4;
+
+//Temperature chip i/o
+OneWire ds(DS18S20_Pin);
 //MPU6050 mpu(0x69); // <-- use for AD0 high
 
 /* =========================================================================
@@ -112,11 +77,11 @@ int time;
 // components with gravity removed and adjusted for the world frame of
 // reference (yaw is relative to initial orientation, since no magnetometer
 // is present in this case). Could be quite handy in some cases.
-//#define OUTPUT_READABLE_WORLDACCEL
+#define OUTPUT_READABLE_WORLDACCEL
 
 // uncomment "OUTPUT_TEAPOT" if you want output that matches the
 // format used for the InvenSense teapot demo
-#define OUTPUT_TEAPOT
+//#define OUTPUT_TEAPOT
 
 
 
@@ -172,7 +137,7 @@ void setup() {
     // initialize serial communication
     // (115200 chosen because it is required for Teapot Demo output, but it's
     // really up to you depending on your project)
-    Serial.begin(115200);
+    Serial.begin(9600);
     while (!Serial); // wait for Leonardo enumeration, others continue immediately
 
     // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
@@ -189,21 +154,15 @@ void setup() {
     Serial.println(F("Testing device connections..."));
     Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
 
-    // wait for ready
-    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-    while (Serial.available() && Serial.read()); // empty buffer
-    while (!Serial.available());                 // wait for data
-    while (Serial.available() && Serial.read()); // empty buffer again
-
     // load and configure the DMP
     Serial.println(F("Initializing DMP..."));
     devStatus = mpu.dmpInitialize();
 
     // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(220);
-    mpu.setYGyroOffset(76);
-    mpu.setZGyroOffset(-85);
-    mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+//    mpu.setXGyroOffset(220);
+//    mpu.setYGyroOffset(76);
+//    mpu.setZGyroOffset(-85);
+//    mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
 
     // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
@@ -236,6 +195,9 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     
     time = millis();
+  
+  // Transmission setup
+  pinMode(RADIOPIN,OUTPUT);
 }
 
 
@@ -245,22 +207,14 @@ void setup() {
 // ================================================================
 
 void loop() {
-    // if programming failed, don't try to do anything
-    if (!dmpReady) return;
+
+  String dataPacket = String("");
+
+  // Structure of the packet:
+  // x,y,z,temp,checksum
 
     // wait for MPU interrupt or extra packet(s) available
-    while (!mpuInterrupt && fifoCount < packetSize) {
-        // other program behavior stuff here
-        // .
-        // .
-        // .
-        // if you are really paranoid you can frequently test in between other
-        // stuff to see if mpuInterrupt is true, and if so, "break;" from the
-        // while() loop to immediately process the MPU data
-        // .
-        // .
-        // .
-    }
+    while (!mpuInterrupt && fifoCount < packetSize){}
 
     // reset interrupt flag and get INT_STATUS byte
     mpuInterrupt = false;
@@ -269,14 +223,6 @@ void loop() {
     // get current FIFO count
     fifoCount = mpu.getFIFOCount();
 
-    // check for overflow (this should never happen unless our code is too inefficient)
-    if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-        // reset so we can continue cleanly
-        mpu.resetFIFO();
-        Serial.println(F("FIFO overflow!"));
-
-    // otherwise, check for DMP data ready interrupt (this should happen frequently)
-    } else if (mpuIntStatus & 0x02) {
         // wait for correct available data length, should be a VERY short wait
         while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
@@ -287,108 +233,185 @@ void loop() {
         // (this lets us immediately read more without waiting for an interrupt)
         fifoCount -= packetSize;
 
-        #ifdef OUTPUT_READABLE_QUATERNION
-        if (millis() - time > TIME_PERIOD) {
-            // display quaternion values in easy matrix form: w x y z
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            Serial.print("quat\t");
-            Serial.print(q.w);
-            Serial.print("\t");
-            Serial.print(q.x);
-            Serial.print("\t");
-            Serial.print(q.y);
-            Serial.print("\t");
-            Serial.println(q.z);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_EULER
-        if (millis() - time > TIME_PERIOD) {
-            // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetEuler(euler, &q);
-            Serial.print("euler\t");
-            Serial.print(euler[0] * 180/M_PI);
-            Serial.print("\t");
-            Serial.print(euler[1] * 180/M_PI);
-            Serial.print("\t");
-            Serial.println(euler[2] * 180/M_PI);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_YAWPITCHROLL
-        if (millis() - time > TIME_PERIOD) {
-            // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-            Serial.print("ypr\t");
-            Serial.print(ypr[0] * 180/M_PI);
-            Serial.print("\t");
-            Serial.print(ypr[1] * 180/M_PI);
-            Serial.print("\t");
-            Serial.println(ypr[2] * 180/M_PI);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_REALACCEL
-        if (millis() - time > TIME_PERIOD) {
-            // display real acceleration, adjusted to remove gravity
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetAccel(&aa, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-            Serial.print("areal\t");
-            Serial.print(aaReal.x);
-            Serial.print("\t");
-            Serial.print(aaReal.y);
-            Serial.print("\t");
-            Serial.println(aaReal.z);
-            time = millis();
-        }
-        #endif
-
-        #ifdef OUTPUT_READABLE_WORLDACCEL
-        if (millis() - time > TIME_PERIOD) {
+//        if (millis() - time > TIME_PERIOD) {
             // display initial world-frame acceleration, adjusted to remove gravity
             // and rotated based on known orientation from quaternion
             mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetAccel(&aa, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
-            Serial.print("aworld\t");
-            Serial.print(aaWorld.x);
-            Serial.print("\t");
-            Serial.print(aaWorld.y);
-            Serial.print("\t");
-            Serial.println(aaWorld.z);
+//            mpu.dmpGetAccel(&aa, fifoBuffer);
+//            mpu.dmpGetGravity(&gravity, &q);
+//            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+//            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
+            dataPacket += String((int)(q.w * 1000));
+            dataPacket += String(",");
+            dataPacket += String((int)(q.x * 1000));
+            dataPacket += String(",");
+            dataPacket += String((int)(q.y * 1000));
+            dataPacket += String(",");
+            dataPacket += String((int)(q.z * 1000));
+            dataPacket += String(",");
             time = millis();
-        }
-        #endif
-    
-        #ifdef OUTPUT_TEAPOT
-        if (millis() - time > TIME_PERIOD) {
-            // display quaternion values in InvenSense Teapot demo format:
-            teapotPacket[2] = fifoBuffer[0];
-            teapotPacket[3] = fifoBuffer[1];
-            teapotPacket[4] = fifoBuffer[4];
-            teapotPacket[5] = fifoBuffer[5];
-            teapotPacket[6] = fifoBuffer[8];
-            teapotPacket[7] = fifoBuffer[9];
-            teapotPacket[8] = fifoBuffer[12];
-            teapotPacket[9] = fifoBuffer[13];
-            Serial.write(teapotPacket, 14);
-            teapotPacket[11]++; // packetCount, loops at 0xFF on purpose
-            time = millis();
-        }
-        #endif
+//        }
+  mpu.resetFIFO();
 
-        // blink LED to indicate activity
-        blinkState = !blinkState;
-        digitalWrite(LED_PIN, blinkState);
-    }
+  //------ temperature ------//
+  float temperature = getTemp(); //will take about 750ms to run
+  char buff[10];
+  sprintf(buff, "%d", (int)(temperature * 1000));
+  dataPacket += String(buff);
+
+  // Wire.write returns false if the data couldn't be sent
+  char dataOut[128];
+
+  char checksum_str[6];
+
+  unsigned int CHECKSUM = gps_CRC16_checksum(dataPacket);  // Calculates the checksum for this datastring
+  sprintf(checksum_str, "*%04X\n", CHECKSUM);
+  dataPacket += String(checksum_str);
+  dataPacket.toCharArray(dataOut, dataPacket.length());
+  Serial.println(dataOut);
+  rtty_txstring (dataOut);
+
+}
+
+// Returns the temperature from one DS18S20 in DEG Celsius
+float getTemp() {
+
+  byte data[12];
+  byte addr[8];
+
+  if ( !ds.search(addr)) {
+    //no more sensors on chain, reset search
+    ds.reset_search();
+    return -1000;
+  }
+
+  if ( OneWire::crc8( addr, 7) != addr[7]) {
+    //Serial.println("CRC is not valid!");
+    return -1000;
+  }
+
+  if ( addr[0] != 0x10 && addr[0] != 0x28) {
+    //Serial.print("Device is not recognized");
+    return -1000;
+  }
+
+  ds.reset();
+  ds.select(addr);
+  ds.write(0x44,1); // start conversion, with parasite power on at the end
+
+  delay(750); // Wait for temperature conversion to complete
+
+  byte present = ds.reset();
+  ds.select(addr);
+  ds.write(0xBE); // Read Scratchpad
+
+
+  for (int i = 0; i < 9; i++) { // we need 9 bytes
+    data[i] = ds.read();
+  }
+
+  ds.reset_search();
+
+  byte MSB = data[1];
+  byte LSB = data[0];
+
+  float tempRead = ((MSB << 8) | LSB); //using two's compliment
+  float TemperatureSum = tempRead / 16;
+
+  return TemperatureSum;
+
+}
+
+
+void rtty_txstring (char * string)
+{
+
+  /* Simple function to sent a char at a time to
+     ** rtty_txbyte function.
+    ** NB Each char is one byte (8 Bits)
+    */
+
+  char c;
+
+  c = *string++;
+
+  while ( c != '\0')
+  {
+    rtty_txbyte (c);
+    c = *string++;
+  }
+}
+
+
+void rtty_txbyte (char c)
+{
+  /* Simple function to sent each bit of a char to
+    ** rtty_txbit function.
+    ** NB The bits are sent Least Significant Bit first
+    **
+    ** All chars should be preceded with a 0 and
+    ** proceded with a 1. 0 = Start bit; 1 = Stop bit
+    **
+    */
+
+  int i;
+
+  rtty_txbit (0); // Start bit
+
+  // Send bits for for char LSB first
+
+  for (i=0;i<7;i++) // Change this here 7 or 8 for ASCII-7 / ASCII-8
+  {
+    if (c & 1) rtty_txbit(1);
+
+    else rtty_txbit(0);
+
+    c = c >> 1;
+
+  }
+
+  rtty_txbit (1); // Stop bit
+  rtty_txbit (1); // Stop bit
+}
+
+void rtty_txbit (int bit)
+{
+  if (bit)
+  {
+    // high
+    digitalWrite(RADIOPIN, HIGH);
+  }
+  else
+  {
+    // low
+    digitalWrite(RADIOPIN, LOW);
+
+  }
+
+  //                  delayMicroseconds(3370); // 300 baud
+  delayMicroseconds(10000); // For 50 Baud uncomment this and the line below.
+  delayMicroseconds(10150); // You can't do 20150 it just doesn't work as the
+                            // largest value that will produce an accurate delay is 16383
+                            // See : http://arduino.cc/en/Reference/DelayMicroseconds
+
+}
+
+uint16_t gps_CRC16_checksum (String s)
+{
+  char string[128];
+  s.toCharArray(string, s.length());
+  size_t i;
+  uint16_t crc;
+  uint8_t c;
+
+  crc = 0xFFFF;
+
+  // Calculate checksum ignoring the first two $s
+  for (i = 2; i < strlen(string); i++)
+  {
+    c = string[i];
+    crc = _crc_xmodem_update (crc, c);
+  }
+
+  return crc;
 }
