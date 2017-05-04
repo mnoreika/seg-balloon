@@ -208,7 +208,7 @@ void setup() {
 
 void loop() {
 
-  String dataPacket = String("");
+  String dataPacket = String('\n');
 
   // Structure of the packet:
   // x,y,z,temp,checksum
@@ -270,6 +270,7 @@ void loop() {
   dataPacket.toCharArray(dataOut, dataPacket.length());
   Serial.println(dataOut);
   rtty_txstring (dataOut);
+  delay(1000);
 
 }
 
